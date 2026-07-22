@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+<link rel="stylesheet" href="_ds/industry-2d09300d-dd91-4034-bbfa-0207d4962244/styles.css">
+<script src="_ds/industry-2d09300d-dd91-4034-bbfa-0207d4962244/_ds_bundle.js"></script>
+<style>
+  body{margin:0}
+  a{color:var(--color-accent);text-decoration:none}
+  a:hover{color:var(--color-accent-700)}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:var(--color-neutral-300)}
+  .navlink{display:flex;align-items:center;gap:10px;padding:7px 10px;font-size:13.5px;color:var(--color-neutral-700);text-decoration:none}
+  .navlink:hover{color:var(--color-text);background:color-mix(in srgb, var(--color-text) 5%, transparent)}
+  .navlink.active{color:var(--color-text);background:color-mix(in srgb, var(--color-text) 6%, transparent);font-weight:500}
+  .rowbtn{cursor:pointer}
+  .rowbtn:hover{background:color-mix(in srgb, var(--color-text) 4%, transparent)}
+  .rowbtn.selected{background:color-mix(in srgb, var(--color-accent) 8%, transparent)}
+  .sidebar-dark{background:#343135;color:#e9e7e8;border-right:1px solid rgba(255,255,255,0.12)}
+  .sidebar-dark h6{color:#9a9599}
+  .sidebar-dark .navlink{color:#c9c5c8}
+  .sidebar-dark .navlink:hover{color:#fff;background:rgba(255,255,255,0.08)}
+  .sidebar-dark .navlink.active{color:#fff;background:rgba(255,255,255,0.12)}
+  .sidebar-dark .blueprint{border-color:rgba(255,255,255,0.3)}
+  .sidebar-dark .corner{color:rgba(255,255,255,0.55)}
+  .sidebar-dark .btn-secondary{border-color:rgba(255,255,255,0.3);color:#fff}
+  .sidebar-dark .btn-ghost{color:#a9c7e6}
+</style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;background:var(--color-bg);color:var(--color-text)">
+
+  <aside class="sidebar-dark" style="width:244px;flex-shrink:0;padding:var(--space-6) var(--space-3);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;gap:9px;padding:0 var(--space-2) var(--space-6)">
+      <div class="blueprint" style="width:26px;height:26px;flex-shrink:0;display:flex;align-items:center;justify-content:center">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16"/><rect x="9" y="9" width="6" height="6"/></svg>
+      </div>
+      <span style="font-family:var(--font-heading);font-weight:600;font-size:14.5px">Agentic AI Platform</span>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:var(--space-6)">
+      <div>
+        <h6 style="padding:0 var(--space-2);margin-bottom:6px;color:var(--color-neutral-600)">Workspace</h6>
+        <nav style="display:flex;flex-direction:column;gap:1px">
+          <a class="navlink" href="Chat.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>Chat</a>
+          <a class="navlink" href="Projects.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>Projects</a>
+        </nav>
+      </div>
+      <div>
+        <h6 style="padding:0 var(--space-2);margin-bottom:6px;color:var(--color-neutral-600)">Intelligence Catalog</h6>
+        <nav style="display:flex;flex-direction:column;gap:1px">
+          <a class="navlink" href="Agents.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16"/><rect x="9" y="9" width="6" height="6"/></svg>Agents</a>
+          <a class="navlink" href="Skills.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>Skills</a>
+          <a class="navlink" href="Tools.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.7 6.3a4 4 0 0 1-5.1 5.1L4 17l3 3 5.6-5.6a4 4 0 0 1 5.1-5.1l-3 3-2-2z"/></svg>Tools</a>
+          <a class="navlink" href="Plugins.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 3h4a1 1 0 0 1 1 1v2.2a1.8 1.8 0 1 0 0 3.6V12a1 1 0 0 1-1 1h-2.2a1.8 1.8 0 1 0-3.6 0H5a1 1 0 0 1-1-1V9a1.8 1.8 0 1 0 0-3.6V4a1 1 0 0 1 1-1h2.2a1.8 1.8 0 1 0 3.6 0z"/></svg>Plugins</a>
+          <a class="navlink" href="Hooks.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>Hooks</a>
+          <a class="navlink active" href="Prompts.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>Prompts</a>
+          <a class="navlink" href="Personas.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Personas</a>
+          <a class="navlink" href="Datasources.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Datasources</a>
+        </nav>
+      </div>
+      <sc-if value="{{ isAdmin }}">
+        <div>
+          <h6 style="padding:0 var(--space-2);margin-bottom:6px;color:var(--color-neutral-600)">Admin</h6>
+          <nav style="display:flex;flex-direction:column;gap:1px">
+            <a class="navlink" href="AdminUsers.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Tenant &amp; Users</a>
+          </nav>
+        </div>
+      </sc-if>
+    </div>
+    <div style="border-top:1px solid var(--color-divider);padding-top:var(--space-4);display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:0 var(--space-2)">
+        <div>
+          <div style="font-size:13px;font-weight:500">Jordan Lee</div>
+          <div class="tag {{ roleTagClass }}" style="margin-top:3px">{{ roleLabel }}</div>
+        </div>
+        <button class="btn btn-ghost" onClick="{{ toggleRole }}" style="font-size:11px">Switch</button>
+      </div>
+      <button class="btn btn-secondary btn-block">Log out</button>
+    </div>
+  </aside>
+
+  <main style="flex:1;padding:var(--space-8);min-width:0">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:var(--space-4);margin-bottom:var(--space-6)">
+      <div>
+        <h1 style="margin-bottom:6px">Prompts</h1>
+        <p class="text-muted" style="max-width:640px;margin:0">Reusable templates, surfaced in chat via the "/" command.</p>
+      </div>
+      <button class="btn btn-primary" onClick="{{ openCreate }}">New Prompt</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:272px 1fr;gap:var(--space-6);align-items:flex-start">
+
+      <div class="blueprint" style="padding:var(--space-2);position:sticky;top:var(--space-6);display:flex;flex-direction:column;gap:2px">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <sc-for list="{{ prompts }}" as="p" hint-placeholder-count="4">
+          <div class="rowbtn {{ p.selectedClass }}" style="padding:10px 12px;display:flex;flex-direction:column;gap:5px" onClick="{{ p.onSelect }}">
+            <span style="font-weight:500;font-size:14px">{{ p.name }}</span>
+            <span class="tag {{ p.statusTagClass }}" style="width:fit-content">{{ p.statusLabel }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div class="blueprint" style="padding:var(--space-6)">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:var(--space-2)">
+          <div>
+            <h6 style="color:var(--color-accent-700);margin-bottom:4px">Prompt</h6>
+            <h2 style="margin-bottom:0">{{ selected.name }}</h2>
+          </div>
+          <button class="btn" style="color:#a23b3b;border-color:#a23b3b">Delete</button>
+        </div>
+        <p class="text-muted" style="max-width:680px;margin-bottom:var(--space-5)">{{ selected.description }}</p>
+
+        <div style="display:flex;flex-direction:column;gap:var(--space-4)">
+          <div class="field"><label>Name</label><input class="input" defaultValue="{{ selected.name }}"/></div>
+          <div class="field"><label>Description</label><textarea class="input" rows="2" defaultValue="{{ selected.description }}"></textarea></div>
+          <div class="field"><label>Template content</label><textarea class="input" rows="8" style="font-family:monospace;font-size:13px" defaultValue="{{ selected.content }}"></textarea></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" checked="{{ selected.isActive }}"/>
+            <label style="margin:0;font-size:13px">Active</label>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:var(--space-6);padding-top:var(--space-4);border-top:1px solid var(--color-divider)">
+          <button class="btn btn-primary">Save</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+const PROMPTS = [
+  { id: "1", name: "Weekly Status Digest", description: "Summarize this week's tickets into a stakeholder-ready digest.", isActive: true, content: "Summarize the following {{count}} tickets into a 5-bullet executive digest. Flag anything overdue or escalated." },
+  { id: "2", name: "PR Review Checklist", description: "Structured review pass for pull requests.", isActive: true, content: "Review the diff for: correctness, security, test coverage, and style. Cite file:line for every issue found." },
+  { id: "3", name: "Meeting Notes to Action Items", description: "Turn raw meeting notes into tracked action items.", isActive: false, content: "Convert these meeting notes into a table of Owner | Action | Due date." },
+];
+
+class Component extends DCLogic {
+  state = { role: "admin", selectedId: "1" };
+
+  componentDidMount() {
+    try { const r = localStorage.getItem("industry_demo_role"); if (r) this.setState({ role: r }); } catch (e) {}
+  }
+  toggleRole = () => {
+    const next = this.state.role === "admin" ? "member" : "admin";
+    this.setState({ role: next });
+    try { localStorage.setItem("industry_demo_role", next); } catch (e) {}
+  };
+  select = (id) => this.setState({ selectedId: id });
+  openCreate = () => this.setState({ selectedId: null });
+
+  renderVals() {
+    const self = this;
+    const isAdmin = this.state.role === "admin";
+    const raw = PROMPTS.find((p) => p.id === this.state.selectedId) || PROMPTS[0];
+
+    const prompts = PROMPTS.map((p) => ({
+      name: p.name,
+      statusLabel: p.isActive ? "active" : "inactive",
+      statusTagClass: p.isActive ? "tag-accent" : "tag-neutral",
+      selectedClass: this.state.selectedId === p.id ? "selected" : "",
+      onSelect: () => self.select(p.id),
+    }));
+
+    const selected = { name: raw.name, description: raw.description, content: raw.content, isActive: raw.isActive };
+
+    return {
+      isAdmin,
+      roleLabel: isAdmin ? "Admin" : "Member",
+      roleTagClass: isAdmin ? "tag-accent" : "tag-neutral",
+      toggleRole: this.toggleRole,
+      prompts,
+      selected,
+      openCreate: this.openCreate,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

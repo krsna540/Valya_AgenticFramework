@@ -1,0 +1,37 @@
+# Repo-wide tool configuration only — this is not a buildable/installable
+# package. Each Python service (backend/, embedder/, reranker/, vlm-captioner/)
+# has its own pyproject.toml with its own dependencies and Dockerfile.
+# Picked in Milestone 0 per docs/IMPLEMENTATION_PLAN.md step 10: uv for
+# dependency management, ruff for lint+format, pre-commit for hooks.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["frontend", "node_modules", "*.egg-info"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "B008",  # `Depends(...)` / `Header(...)` in argument defaults is the idiomatic
+             # FastAPI pattern (the whole ecosystem writes it this way), not the
+             # mutable-default-argument footgun this rule exists to catch.
+    "UP017", # prefer `datetime.timezone.utc` over the 3.11-only `datetime.UTC` alias —
+             # keeps the code runnable on Python 3.10 (useful for local tooling/tests)
+             # even though the Docker images target 3.11.
+    "UP042", # prefer `enum.StrEnum` (3.11-only) over `class X(str, enum.Enum)` — same
+             # 3.10-compatibility rationale as UP017 above; `str, enum.Enum` also matches
+             # SQLAlchemy's Enum(values_callable=...) pattern used in app/models/.
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"

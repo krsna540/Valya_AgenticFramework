@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<![CDATA[
+<helmet>
+<link rel="stylesheet" href="_ds/industry-2d09300d-dd91-4034-bbfa-0207d4962244/styles.css">
+<script src="_ds/industry-2d09300d-dd91-4034-bbfa-0207d4962244/_ds_bundle.js"></script>
+<style>
+  body{margin:0}
+  a{color:var(--color-accent)}
+  a:hover{color:var(--color-accent-700)}
+</style>
+</helmet>
+
+<div style="min-height:100vh;display:grid;grid-template-columns:1fr 1fr;background:var(--color-bg)">
+
+  <div style="background:var(--color-accent-900);color:var(--color-bg);padding:var(--space-8);display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden;background-image:linear-gradient(color-mix(in srgb,var(--color-bg) 6%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--color-bg) 6%,transparent) 1px,transparent 1px);background-size:40px 40px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="blueprint" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-color:color-mix(in srgb,var(--color-bg) 40%,transparent)">
+        <i class="corner tl" style="color:var(--color-bg)"></i><i class="corner tr" style="color:var(--color-bg)"></i><i class="corner bl" style="color:var(--color-bg)"></i><i class="corner br" style="color:var(--color-bg)"></i>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>
+      </div>
+      <span style="font-family:var(--font-heading);font-weight:600;font-size:18px;letter-spacing:0.02em">AGENTIC AI PLATFORM</span>
+    </div>
+
+    <div style="max-width:460px">
+      <h6 style="color:var(--color-accent-300);margin-bottom:var(--space-3)">Composable agent infrastructure</h6>
+      <h1 style="font-size:46px;margin-bottom:var(--space-4)">Build, wire, and deploy intelligence — one project at a time.</h1>
+      <p style="opacity:0.75;font-size:15px;max-width:400px">Agents assembled from skills, tools, hooks and datasources — bound to a Project, frozen, and deployed.</p>
+    </div>
+
+    <div style="display:flex;gap:var(--space-6)">
+      <div><div style="font-family:var(--font-heading);font-size:28px">10</div><div style="font-size:11px;opacity:0.65;text-transform:uppercase;letter-spacing:0.08em">Lifecycle stages</div></div>
+      <div><div style="font-family:var(--font-heading);font-size:28px">8</div><div style="font-size:11px;opacity:0.65;text-transform:uppercase;letter-spacing:0.08em">Connector types</div></div>
+      <div><div style="font-family:var(--font-heading);font-size:28px">∞</div><div style="font-size:11px;opacity:0.65;text-transform:uppercase;letter-spacing:0.08em">Compositions</div></div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;justify-content:center;padding:var(--space-8)">
+    <div class="blueprint card" style="width:100%;max-width:400px;padding:var(--space-6);gap:var(--space-4)">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div>
+        <h6 style="color:var(--color-accent-700)">Sign in</h6>
+        <h2 style="margin-bottom:var(--space-2)">Welcome back</h2>
+        <p class="text-muted" style="margin-bottom:0">Sign in to your agentic AI workspace.</p>
+      </div>
+
+      <form onSubmit="{{ handleSubmit }}" style="display:flex;flex-direction:column;gap:var(--space-4)">
+        <div class="field">
+          <label htmlFor="email">Email</label>
+          <input id="email" className="input" type="email" required="{{ true }}" value="{{ email }}" onChange="{{ onEmailChange }}"/>
+        </div>
+        <div class="field">
+          <label htmlFor="password">Password</label>
+          <input id="password" className="input" type="password" required="{{ true }}" value="{{ password }}" onChange="{{ onPasswordChange }}"/>
+        </div>
+        <sc-if value="{{ error }}">
+          <p style="color:var(--color-accent-800);font-size:13px;background:var(--color-accent-100);border:1px solid var(--color-accent-300);padding:8px 10px">{{ error }}</p>
+        </sc-if>
+        <button className="btn btn-primary btn-block" type="submit" disabled="{{ submitting }}" style="height:40px">{{ submitLabel }}</button>
+      </form>
+
+      <p class="text-muted" style="margin:0;font-size:13px">No account? <a href="Signup.dc.html">Create one</a></p>
+    </div>
+  </div>
+</div>
+]]>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+<![CDATA[
+class Component extends DCLogic {
+  state = { email: "jordan@acme-corp.com", password: "", submitting: false, error: null };
+
+  onEmailChange = (e) => this.setState({ email: e.target.value, error: null });
+  onPasswordChange = (e) => this.setState({ password: e.target.value, error: null });
+
+  handleSubmit = (e) => {
+    e.preventDefault();
+    if (!this.state.email || !this.state.password) {
+      this.setState({ error: "Enter both email and password." });
+      return;
+    }
+    this.setState({ submitting: true });
+    try { localStorage.setItem("industry_demo_role", "admin"); } catch (err) {}
+    setTimeout(() => { window.location.href = "Chat.dc.html"; }, 400);
+  };
+
+  renderVals() {
+    return {
+      email: this.state.email,
+      password: this.state.password,
+      submitting: this.state.submitting,
+      submitLabel: this.state.submitting ? "Signing in..." : "Sign in",
+      error: this.state.error,
+      onEmailChange: this.onEmailChange,
+      onPasswordChange: this.onPasswordChange,
+      handleSubmit: this.handleSubmit,
+    };
+  }
+}
+]]>
+</script>
+</body>
+</html>

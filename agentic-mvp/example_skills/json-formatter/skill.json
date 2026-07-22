@@ -1,0 +1,10 @@
+{
+  "name": "json-formatter",
+  "version": "1.0.0",
+  "triggers": {
+    "keywords": ["format json", "pretty print", "minified json"],
+    "intents": ["text_analysis"],
+    "lifecycle_events": ["UserPromptSubmit"]
+  },
+  "hooks": []
+}

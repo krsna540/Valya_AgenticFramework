@@ -1,0 +1,318 @@
+{
+  "$defs": {
+    "Block": {
+      "description": "One content unit inside a Section. `text` is the field every\nnon-visual stage reads by default (chunker, embedder); `table`/`image`\ncarry the richer structured twin when `type` calls for it.",
+      "properties": {
+        "type": {
+          "enum": [
+            "paragraph",
+            "heading",
+            "table",
+            "code",
+            "image",
+            "list",
+            "quote"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page"
+        },
+        "bbox": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bbox"
+        },
+        "table": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableBlock"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "code_lang": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Code Lang"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageBlock"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Block",
+      "type": "object"
+    },
+    "ImageBlock": {
+      "description": "\u00a74: `image?: { sha256, width, height, mime, ocr_text?, alt_text? }`.\nMilestone 2 does not extract images yet (that's Milestone 6) \u2014 this\nmodel exists now so the Block shape is final and extractors written\nlater don't change the contract every other stage already depends on.",
+      "properties": {
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "width": {
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "title": "Height",
+          "type": "integer"
+        },
+        "mime": {
+          "title": "Mime",
+          "type": "string"
+        },
+        "ocr_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ocr Text"
+        },
+        "alt_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alt Text"
+        }
+      },
+      "required": [
+        "sha256",
+        "width",
+        "height",
+        "mime"
+      ],
+      "title": "ImageBlock",
+      "type": "object"
+    },
+    "Section": {
+      "description": "\u00a74: `sections[ { id, level, heading, path, blocks[] } ]`.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "level": {
+          "title": "Level",
+          "type": "integer"
+        },
+        "heading": {
+          "title": "Heading",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "blocks": {
+          "items": {
+            "$ref": "#/$defs/Block"
+          },
+          "title": "Blocks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "level",
+        "heading",
+        "path"
+      ],
+      "title": "Section",
+      "type": "object"
+    },
+    "TableBlock": {
+      "description": "Structured table \u2014 markdown for LLM/display consumption, JSON twin\n(rows of cells) for anything that needs to reason about cell values\nprogrammatically (\u00a74: \"table? // structured table (markdown + JSON twin)\").",
+      "properties": {
+        "markdown": {
+          "title": "Markdown",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "header": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Header"
+        }
+      },
+      "required": [
+        "markdown"
+      ],
+      "title": "TableBlock",
+      "type": "object"
+    }
+  },
+  "description": "The full canonical document \u2014 persisted to MinIO as `canonical.json`\n(Stage 2 output) and read back by the chunker (Stage 5).",
+  "properties": {
+    "doc_id": {
+      "format": "uuid",
+      "title": "Doc Id",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "integer"
+    },
+    "project_id": {
+      "format": "uuid",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "tenant_id": {
+      "format": "uuid",
+      "title": "Tenant Id",
+      "type": "string"
+    },
+    "doc_type": {
+      "title": "Doc Type",
+      "type": "string"
+    },
+    "source_uri": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Uri"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "language": {
+      "default": "en",
+      "title": "Language",
+      "type": "string"
+    },
+    "breadcrumbs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Breadcrumbs",
+      "type": "array"
+    },
+    "acl_groups": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Acl Groups",
+      "type": "array"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "sections": {
+      "items": {
+        "$ref": "#/$defs/Section"
+      },
+      "title": "Sections",
+      "type": "array"
+    }
+  },
+  "required": [
+    "doc_id",
+    "version",
+    "project_id",
+    "tenant_id",
+    "doc_type"
+  ],
+  "title": "DocumentDOM",
+  "type": "object"
+}

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+<link rel="stylesheet" href="_ds/industry-2d09300d-dd91-4034-bbfa-0207d4962244/styles.css">
+<script src="_ds/industry-2d09300d-dd91-4034-bbfa-0207d4962244/_ds_bundle.js"></script>
+<style>
+  body{margin:0}
+  a{color:var(--color-accent);text-decoration:none}
+  a:hover{color:var(--color-accent-700)}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:var(--color-neutral-300)}
+  .navlink{display:flex;align-items:center;gap:10px;padding:7px 10px;font-size:13.5px;color:var(--color-neutral-700);text-decoration:none}
+  .navlink:hover{color:var(--color-text);background:color-mix(in srgb, var(--color-text) 5%, transparent)}
+  .navlink.active{color:var(--color-text);background:color-mix(in srgb, var(--color-text) 6%, transparent);font-weight:500}
+  .navlink svg{flex-shrink:0}
+  .rowbtn{cursor:pointer}
+  .rowbtn:hover{background:color-mix(in srgb, var(--color-text) 4%, transparent)}
+  .tabbtn{background:none;border:none;font-family:var(--font-heading);font-weight:600;font-size:13px;padding:9px 4px;cursor:pointer;color:var(--color-neutral-600);border-bottom:2px solid transparent;margin-right:var(--space-5)}
+  .tabbtn.active{color:var(--color-text);border-bottom-color:var(--color-accent)}
+  .pill{display:inline-block;padding:3px 11px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em}
+  .sidebar-dark{background:#343135;color:#e9e7e8;border-right:1px solid rgba(255,255,255,0.12)}
+  .sidebar-dark h6{color:#9a9599}
+  .sidebar-dark .navlink{color:#c9c5c8}
+  .sidebar-dark .navlink:hover{color:#fff;background:rgba(255,255,255,0.08)}
+  .sidebar-dark .navlink.active{color:#fff;background:rgba(255,255,255,0.12)}
+  .sidebar-dark .blueprint{border-color:rgba(255,255,255,0.3)}
+  .sidebar-dark .corner{color:rgba(255,255,255,0.55)}
+  .sidebar-dark .btn-secondary{border-color:rgba(255,255,255,0.3);color:#fff}
+  .sidebar-dark .btn-ghost{color:#a9c7e6}
+</style>
+</helmet>
+
+<div style="display:flex;min-height:100vh;background:var(--color-bg);color:var(--color-text)">
+
+  <aside class="sidebar-dark" style="width:244px;flex-shrink:0;padding:var(--space-6) var(--space-3);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;gap:9px;padding:0 var(--space-2) var(--space-6)">
+      <div class="blueprint" style="width:26px;height:26px;flex-shrink:0;display:flex;align-items:center;justify-content:center">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16"/><rect x="9" y="9" width="6" height="6"/></svg>
+      </div>
+      <span style="font-family:var(--font-heading);font-weight:600;font-size:14.5px">Agentic AI Platform</span>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:var(--space-6)">
+      <div>
+        <h6 style="padding:0 var(--space-2);margin-bottom:6px;color:var(--color-neutral-600)">Workspace</h6>
+        <nav style="display:flex;flex-direction:column;gap:1px">
+          <a class="navlink" href="Chat.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>Chat</a>
+          <a class="navlink active" href="Projects.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>Projects</a>
+        </nav>
+      </div>
+      <div>
+        <h6 style="padding:0 var(--space-2);margin-bottom:6px;color:var(--color-neutral-600)">Intelligence Catalog</h6>
+        <nav style="display:flex;flex-direction:column;gap:1px">
+          <a class="navlink" href="Agents.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16"/><rect x="9" y="9" width="6" height="6"/></svg>Agents</a>
+          <a class="navlink" href="Skills.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>Skills</a>
+          <a class="navlink" href="Tools.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.7 6.3a4 4 0 0 1-5.1 5.1L4 17l3 3 5.6-5.6a4 4 0 0 1 5.1-5.1l-3 3-2-2z"/></svg>Tools</a>
+          <a class="navlink" href="Plugins.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 3h4a1 1 0 0 1 1 1v2.2a1.8 1.8 0 1 0 0 3.6V12a1 1 0 0 1-1 1h-2.2a1.8 1.8 0 1 0-3.6 0H5a1 1 0 0 1-1-1V9a1.8 1.8 0 1 0 0-3.6V4a1 1 0 0 1 1-1h2.2a1.8 1.8 0 1 0 3.6 0z"/></svg>Plugins</a>
+          <a class="navlink" href="Hooks.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>Hooks</a>
+          <a class="navlink" href="Prompts.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>Prompts</a>
+          <a class="navlink" href="Personas.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>Personas</a>
+          <a class="navlink" href="Datasources.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Datasources</a>
+        </nav>
+      </div>
+      <sc-if value="{{ isAdmin }}">
+        <div>
+          <h6 style="padding:0 var(--space-2);margin-bottom:6px;color:var(--color-neutral-600)">Admin</h6>
+          <nav style="display:flex;flex-direction:column;gap:1px">
+            <a class="navlink" href="AdminUsers.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Tenant &amp; Users</a>
+          </nav>
+        </div>
+      </sc-if>
+    </div>
+    <div style="border-top:1px solid var(--color-divider);padding-top:var(--space-4);display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:0 var(--space-2)">
+        <div>
+          <div style="font-size:13px;font-weight:500">Jordan Lee</div>
+          <div class="tag {{ roleTagClass }}" style="margin-top:3px">{{ roleLabel }}</div>
+        </div>
+        <button class="btn btn-ghost" onClick="{{ toggleRole }}" style="font-size:11px">Switch</button>
+      </div>
+      <button class="btn btn-secondary btn-block">Log out</button>
+    </div>
+  </aside>
+
+  <main style="flex:1;padding:var(--space-8);min-width:0">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:var(--space-4);margin-bottom:var(--space-6)">
+      <div>
+        <h1 style="margin-bottom:6px">Projects</h1>
+        <p class="text-muted" style="max-width:620px;margin:0">The deployment wrapper: connect datasources, map users and personas, compose the Intelligence Layer, then freeze and deploy the runtime.</p>
+      </div>
+      <sc-if value="{{ isAdmin }}"><button class="btn btn-primary" onClick="{{ toggleCreate }}">New Project</button></sc-if>
+    </div>
+
+    <sc-if value="{{ showCreate }}">
+      <div class="blueprint" style="padding:var(--space-5);margin-bottom:var(--space-6);display:flex;flex-direction:column;gap:var(--space-4)">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <h5 style="margin:0">New Project</h5>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)">
+          <div class="field"><label>Name</label><input class="input" placeholder="Marketing Content Agent"/></div>
+          <div class="field"><label>Description</label><input class="input" placeholder="One-line summary"/></div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="btn btn-secondary" onClick="{{ toggleCreate }}">Cancel</button>
+          <button class="btn btn-primary" onClick="{{ toggleCreate }}">Create</button>
+        </div>
+      </div>
+    </sc-if>
+
+    <div style="display:grid;grid-template-columns:272px 1fr;gap:var(--space-6);align-items:flex-start">
+
+      <div class="blueprint" style="padding:var(--space-2);position:sticky;top:var(--space-6);display:flex;flex-direction:column;gap:2px">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <sc-for list="{{ projects }}" as="p" hint-placeholder-count="3">
+          <div class="rowbtn" style="background:{{ p.rowBg }};padding:10px 12px;display:flex;flex-direction:column;gap:5px" onClick="{{ p.onSelect }}">
+            <span style="font-weight:500;font-size:14px">{{ p.name }}</span>
+            <span class="pill" style="background:{{ p.pillBg }};color:{{ p.pillFg }};width:fit-content">{{ p.status }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div class="blueprint" style="padding:var(--space-6)">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:var(--space-2)">
+          <div>
+            <h6 style="color:var(--color-accent-700);margin-bottom:4px">Project</h6>
+            <h2 style="margin-bottom:0">{{ selected.name }}</h2>
+          </div>
+          <span class="pill" style="background:{{ selected.pillBg }};color:{{ selected.pillFg }};font-size:12px;padding:5px 14px">{{ selected.status }}</span>
+        </div>
+        <p class="text-muted" style="max-width:640px;margin-bottom:var(--space-5)">{{ selected.description }}</p>
+
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-4);margin-bottom:var(--space-6);padding:var(--space-4) 0;border-top:1px solid var(--color-divider);border-bottom:1px solid var(--color-divider)">
+          <div><h6 style="color:var(--color-neutral-600);margin-bottom:4px">Execution mode</h6><div style="font-size:14.5px">{{ selected.executionMode }}</div></div>
+          <div><h6 style="color:var(--color-neutral-600);margin-bottom:4px">Cost center</h6><div style="font-size:14.5px">{{ selected.costCenterLabel }}</div></div>
+          <div><h6 style="color:var(--color-neutral-600);margin-bottom:4px">Mapped users</h6><div style="font-size:14.5px">{{ selected.userCount }}</div></div>
+        </div>
+
+        <div style="display:flex;border-bottom:1px solid var(--color-divider);margin-bottom:var(--space-5)">
+          <button class="tabbtn {{ tabClasses.overview }}" onClick="{{ setTabOverview }}">Overview</button>
+          <button class="tabbtn {{ tabClasses.users }}" onClick="{{ setTabUsers }}">Users</button>
+          <button class="tabbtn {{ tabClasses.datasources }}" onClick="{{ setTabDatasources }}">Datasources</button>
+          <button class="tabbtn {{ tabClasses.intelligence }}" onClick="{{ setTabIntelligence }}">Intelligence</button>
+          <button class="tabbtn {{ tabClasses.runtime }}" onClick="{{ setTabRuntime }}">Runtime &amp; Freeze</button>
+        </div>
+
+        <sc-if value="{{ isOverview }}">
+          <div style="display:flex;flex-direction:column;gap:var(--space-5)">
+            <div class="field"><label>Description</label><textarea class="input" rows="2" disabled="{{ selected.notEditable }}" defaultValue="{{ selected.description }}"></textarea></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)">
+              <div class="field"><label>Cost center / billing tag</label><input class="input" disabled="{{ selected.notEditable }}" defaultValue="{{ selected.costCenter }}"/></div>
+              <div class="field"><label>Execution mode</label>
+                <select class="input" disabled="{{ selected.notEditable }}" defaultValue="{{ selected.executionModeKey }}">
+                  <option value="real_time_chat">Real-Time Chat -- multi-turn conversational interface</option>
+                  <option value="event_driven">Event-Driven -- triggered by an external webhook</option>
+                  <option value="scheduled">Scheduled Execution -- cron-based polling</option>
+                </select>
+              </div>
+            </div>
+            <sc-if value="{{ selected.showCron }}">
+              <div class="field" style="max-width:340px"><label>Cron schedule</label><input class="input" disabled="{{ selected.notEditable }}" defaultValue="{{ selected.scheduleCron }}"/></div>
+            </sc-if>
+            <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:var(--space-2)">
+              <button class="btn btn-secondary">Open in Chat</button>
+              <sc-if value="{{ selected.canEdit }}"><button class="btn btn-primary">Save</button></sc-if>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isUsers }}">
+          <table class="table">
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
+            <tbody>
+              <sc-for list="{{ selected.users }}" as="u" hint-placeholder-count="3">
+                <tr>
+                  <td>{{ u.name }}</td>
+                  <td class="text-muted">{{ u.email }}</td>
+                  <td><span class="tag tag-neutral">{{ u.role }}</span></td>
+                  <td><button class="btn btn-secondary" disabled="{{ selected.notEditable }}" style="font-size:11px">{{ u.action }}</button></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </sc-if>
+
+        <sc-if value="{{ isDatasources }}">
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <sc-for list="{{ selected.datasourceChips }}" as="d" hint-placeholder-count="4">
+              <div class="tag {{ d.tagClass }}">{{ d.name }} <span style="opacity:0.6">({{ d.tier }})</span></div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isIntelligence }}">
+          <p class="text-muted" style="font-size:12.5px;margin-bottom:var(--space-4)">"Attach Agent v1.2, grant it the Jira MCP Tool, apply the PII-Scrubber Hook, activate the Excel Generation Skill." Bindings pin the component's version at bind time.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-5)">
+            <sc-for list="{{ selected.intelligenceGroups }}" as="g" hint-placeholder-count="3">
+              <div class="blueprint" style="padding:var(--space-3)">
+                <h6 style="color:var(--color-neutral-600);margin-bottom:6px">{{ g.label }}</h6>
+                <div style="display:flex;flex-wrap:wrap;gap:8px">
+                  <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="2">
+                    <div class="tag {{ it.tagClass }}">{{ it.name }} <span style="opacity:0.6">v{{ it.version }}</span></div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isRuntime }}">
+          <div class="blueprint" style="padding:0;margin-bottom:var(--space-4)">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-3) var(--space-4);background:var(--color-surface)">
+              <strong>{{ selected.name }}</strong>
+              <span class="pill" style="background:{{ selected.pillBg }};color:{{ selected.pillFg }}">{{ selected.status }}</span>
+            </div>
+            <div style="padding:var(--space-4);border-top:1px solid var(--color-divider);display:flex;flex-direction:column;gap:6px">
+              <h6 style="color:var(--color-neutral-600)">Runtime engine</h6>
+              <div style="display:flex;justify-content:space-between;font-size:13.5px"><span>Mode</span><span>{{ selected.executionMode }}</span></div>
+            </div>
+            <div style="padding:var(--space-4);border-top:1px solid var(--color-divider);display:flex;flex-direction:column;gap:6px">
+              <h6 style="color:var(--color-neutral-600)">Mapped users &amp; personas</h6>
+              <sc-for list="{{ selected.users }}" as="u2" hint-placeholder-count="2">
+                <div style="display:flex;justify-content:space-between;font-size:13.5px"><span>{{ u2.name }}</span><span class="text-muted">{{ u2.persona }}</span></div>
+              </sc-for>
+            </div>
+            <div style="padding:var(--space-4);border-top:1px solid var(--color-divider);display:flex;flex-direction:column;gap:6px">
+              <h6 style="color:var(--color-neutral-600)">Datasources connected</h6>
+              <sc-for list="{{ selected.datasourceChips }}" as="d2" hint-placeholder-count="2">
+                <div style="display:flex;justify-content:space-between;font-size:13.5px"><span>{{ d2.name }}</span><span class="text-muted">{{ d2.tier }} tier</span></div>
+              </sc-for>
+            </div>
+          </div>
+          <sc-if value="{{ isAdmin }}">
+            <div style="display:flex;justify-content:flex-end;gap:8px">
+              <sc-if value="{{ selected.isDraft }}"><button class="btn btn-primary">Freeze</button></sc-if>
+              <sc-if value="{{ selected.isFrozen }}">
+                <button class="btn btn-secondary">Modify Components</button>
+                <button class="btn btn-primary">Confirm &amp; Deploy</button>
+              </sc-if>
+            </div>
+          </sc-if>
+        </sc-if>
+      </div>
+    </div>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+
+const PROJECTS = [
+  {
+    id: "cs",
+    name: "Customer Success Copilot",
+    status: "deployed",
+    executionMode: "Real-Time Chat",
+    executionModeKey: "real_time_chat",
+    description: "Front-line support triage bound to the Zendesk + Confluence datasources.",
+    costCenter: "CS-1002",
+    scheduleCron: "",
+    users: [
+      { name: "Priya Nair", email: "priya@acme-corp.com", role: "member", persona: "Persona: Support Concierge" },
+      { name: "Marcus Webb", email: "marcus@acme-corp.com", role: "admin", persona: "No persona assigned" },
+    ],
+    datasources: [
+      { name: "Zendesk KB", tier: "Internal" },
+      { name: "Confluence Support Space", tier: "Confidential" },
+    ],
+    intelligence: {
+      agents: [{ name: "Support Bot", version: "1.4" }],
+      tools: [{ name: "Zendesk Ticket API", version: "2.0" }],
+      hooks: [{ name: "PII Scrubber", version: "1.0" }],
+      skills: [{ name: "Ticket Summarizer", version: "1.1" }],
+    },
+  },
+  {
+    id: "fin",
+    name: "Finance Close Assistant",
+    status: "frozen",
+    executionMode: "Scheduled Execution: 0 17 * * FRI",
+    executionModeKey: "scheduled",
+    description: "Weekly close-package review across the SQL ledger and SharePoint workpapers.",
+    costCenter: "FIN-0044",
+    scheduleCron: "0 17 * * FRI",
+    users: [{ name: "Dana Kessler", email: "dana@acme-corp.com", role: "member", persona: "Persona: Senior Auditor" }],
+    datasources: [
+      { name: "GL SQL Warehouse", tier: "Restricted" },
+      { name: "Close Workpapers (SharePoint)", tier: "Confidential" },
+    ],
+    intelligence: {
+      agents: [{ name: "Research Analyst", version: "2.1" }],
+      tools: [{ name: "SQL Read Replica", version: "1.0" }],
+      hooks: [{ name: "Mandatory Auditing", version: "1.0" }],
+      skills: [{ name: "Excel Generation", version: "3.0" }],
+    },
+  },
+  {
+    id: "mkt",
+    name: "Marketing Content Agent",
+    status: "draft",
+    executionMode: "Real-Time Chat",
+    executionModeKey: "real_time_chat",
+    description: "",
+    costCenter: "",
+    scheduleCron: "",
+    users: [],
+    datasources: [],
+    intelligence: { agents: [], tools: [], hooks: [], skills: [] },
+  },
+];
+
+const PILL_CLASS = { deployed: "", frozen: "", draft: "", archived: "" };
+
+function pillStyleClass(status) {
+  return "pill-" + status;
+}
+
+class Component extends DCLogic {
+  state = { role: "admin", selectedId: "cs", tab: "overview", showCreate: false };
+
+  componentDidMount() {
+    try {
+      const r = localStorage.getItem("industry_demo_role");
+      if (r) this.setState({ role: r });
+    } catch (e) {}
+  }
+
+  toggleRole = () => {
+    const next = this.state.role === "admin" ? "member" : "admin";
+    this.setState({ role: next });
+    try { localStorage.setItem("industry_demo_role", next); } catch (e) {}
+  };
+
+  select = (id) => this.setState({ selectedId: id, tab: "overview" });
+  setTab = (t) => this.setState({ tab: t });
+  toggleCreate = () => this.setState((s) => ({ showCreate: !s.showCreate }));
+
+  pillColors(status) {
+    if (status === "deployed") return { bg: "var(--color-accent-100)", fg: "var(--color-accent-800)" };
+    if (status === "frozen") return { bg: "var(--color-neutral-200)", fg: "var(--color-neutral-800)" };
+    if (status === "archived") return { bg: "var(--color-neutral-200)", fg: "var(--color-neutral-600)" };
+    return { bg: "transparent", fg: "var(--color-neutral-600)" };
+  }
+
+  renderVals() {
+    const self = this;
+    const isAdmin = this.state.role === "admin";
+    const raw = PROJECTS.find((p) => p.id === this.state.selectedId) || PROJECTS[0];
+    const notEditable = !(isAdmin && raw.status === "draft");
+
+    const projects = PROJECTS.map((p) => {
+      const c = this.pillColors(p.status);
+      return {
+        name: p.name,
+        status: p.status,
+        executionMode: p.executionMode.split(":")[0],
+        pillBg: c.bg,
+        pillFg: c.fg,
+        rowBg: this.state.selectedId === p.id ? "color-mix(in srgb, var(--color-text) 4%, transparent)" : "transparent",
+        onSelect: () => self.select(p.id),
+      };
+    });
+
+    const selPillColors = this.pillColors(raw.status);
+
+    const intelligenceGroups = ["agents", "tools", "hooks", "skills"]
+      .map((key) => ({
+        label: key.charAt(0).toUpperCase() + key.slice(1),
+        items: (raw.intelligence[key] || []).map((it) => ({ name: it.name, version: it.version, tagClass: "tag-accent" })),
+      }))
+      .filter((g) => g.items.length > 0);
+
+    const selected = {
+      name: raw.name,
+      status: raw.status,
+      pillBg: selPillColors.bg,
+      pillFg: selPillColors.fg,
+      description: raw.description || "No description yet.",
+      costCenter: raw.costCenter,
+      costCenterLabel: raw.costCenter || "—",
+      userCount: raw.users.length,
+      executionMode: raw.executionMode,
+      executionModeKey: raw.executionModeKey,
+      showCron: raw.executionModeKey === "scheduled",
+      scheduleCron: raw.scheduleCron,
+      notEditable,
+      canEdit: !notEditable,
+      users: raw.users.map((u) => ({ name: u.name, email: u.email, role: u.role, persona: u.persona, action: "Remove" })),
+      datasourceChips: raw.datasources.map((d) => ({ name: d.name, tier: d.tier, tagClass: "tag-accent-2" })),
+      intelligenceGroups,
+      isDraft: raw.status === "draft",
+      isFrozen: raw.status === "frozen",
+    };
+
+    return {
+      isAdmin,
+      roleLabel: isAdmin ? "Admin" : "Member",
+      roleTagClass: isAdmin ? "tag-accent" : "tag-neutral",
+      toggleRole: this.toggleRole,
+      showCreate: this.state.showCreate,
+      toggleCreate: this.toggleCreate,
+      projects,
+      selected,
+      tabClasses: {
+        overview: this.state.tab === "overview" ? "active" : "",
+        users: this.state.tab === "users" ? "active" : "",
+        datasources: this.state.tab === "datasources" ? "active" : "",
+        intelligence: this.state.tab === "intelligence" ? "active" : "",
+        runtime: this.state.tab === "runtime" ? "active" : "",
+      },
+      isOverview: this.state.tab === "overview",
+      isUsers: this.state.tab === "users",
+      isDatasources: this.state.tab === "datasources",
+      isIntelligence: this.state.tab === "intelligence",
+      isRuntime: this.state.tab === "runtime",
+      setTabOverview: () => this.setTab("overview"),
+      setTabUsers: () => this.setTab("users"),
+      setTabDatasources: () => this.setTab("datasources"),
+      setTabIntelligence: () => this.setTab("intelligence"),
+      setTabRuntime: () => this.setTab("runtime"),
+    };
+  }
+}
+
+</script>
+</body>
+</html>

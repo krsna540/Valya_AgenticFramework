@@ -1,0 +1,10 @@
+{
+  "name": "text-case-converter",
+  "version": "1.0.0",
+  "triggers": {
+    "keywords": ["convert case", "uppercase", "lowercase", "title case", "snake_case", "camelCase", "kebab-case"],
+    "intents": ["text_transformation"],
+    "lifecycle_events": ["UserPromptSubmit"]
+  },
+  "hooks": []
+}

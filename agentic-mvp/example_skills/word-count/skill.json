@@ -1,0 +1,10 @@
+{
+  "name": "word-count",
+  "version": "1.0.0",
+  "triggers": {
+    "keywords": ["word count", "character count", "how many words", "how long is this text"],
+    "intents": ["text_analysis"],
+    "lifecycle_events": ["UserPromptSubmit"]
+  },
+  "hooks": []
+}
