@@ -177,8 +177,7 @@ Key rules, summarized:
 ## 6. Deployment
 
 OPA runs as its own container (`docker-compose.yml`, service `opa`,
-`openpolicyagent/opa:0.68.0-static`), loading `backend/policies/` read-only
-as its policy bundle on `run --server`. There is no embedded/in-process Rego
+`openpolicyagent/opa:0.68.0-static`). There is no embedded/in-process Rego
 evaluator — none exists for Python — so an HTTP sidecar is the only
 integration shape available. `backend`'s `OPA_URL` environment variable
 points at `http://opa:8181`; `depends_on: opa: condition: service_started`
@@ -186,6 +185,23 @@ points at `http://opa:8181`; `depends_on: opa: condition: service_started`
 healthcheck, and `app/core/opa.py` already fails closed rather than
 crashing if OPA isn't ready yet, so a strict health gate isn't necessary for
 correctness).
+
+`opa` no longer loads `backend/policies/` directly. A second service,
+`opa-control-plane` (`openpolicyagent/opa-control-plane:edge`, config at
+`opa-control-plane/ocp.yml`), builds `backend/policies/authz.rego` into a
+compiled bundle and writes it to the `opa_bundles` named volume shared by
+both containers; `opa` runs `run --server --watch /bundles/authz/bundle.tar.gz`
+to pick up and re-serve that bundle whenever opa-control-plane rebuilds it
+(e.g. after a policy edit). This is OCP's standard filesystem
+`object_storage` pattern — for cloud deployments the same `ocp.yml` bundle
+can point at S3/GCS/Azure instead, with `opa` polling that store over HTTP
+via its own `services`/`bundles` config, without changing anything on the
+`backend` side. OCP itself needs no external database for this MVP: with no
+`database:` block in `ocp.yml` it falls back to an in-memory SQLite store
+for its own source/bundle definitions, since `ocp.yml` (checked into the
+repo) is already the durable source of truth and gets reloaded on every
+restart. OCP's management/metrics API is exposed on `OPA_CONTROL_PLANE_PORT`
+(default `8282`) but nothing in this app calls it yet.
 
 **This sandbox cannot run or download OPA** (no docker; GitHub release-asset
 downloads are blocked by the sandbox's network allowlist), so the Rego

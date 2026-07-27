@@ -19,11 +19,37 @@ services:
       timeout: 5s
       retries: 10
 
+  # Named volumes are created root-owned, but the opa-control-plane image
+  # runs as uid 1000 (see its Dockerfile) and needs write access under
+  # /bundles — this one-shot container fixes ownership before it starts.
+  opa-bundles-init:
+    image: busybox:1.36
+    command: ["chown", "-R", "1000:1000", "/bundles"]
+    volumes:
+      - opa_bundles:/bundles
+
+  opa-control-plane:
+    image: openpolicyagent/opa-control-plane:edge
+    restart: unless-stopped
+    # Builds backend/policies/authz.rego into a bundle (per ocp.yml) and
+    # writes it to the opa_bundles volume; the opa service below watches
+    # that path and serves the compiled bundle. See docs/AUTHORIZATION.md §6.
+    command: ["run", "--addr=0.0.0.0:8282", "--config=/config/ocp.yml", "--data-dir=/tmp", "--log-level=info"]
+    volumes:
+      - ./opa-control-plane/ocp.yml:/config/ocp.yml:ro
+      - ./backend/policies:/policies:ro
+      - opa_bundles:/bundles
+    ports:
+      - "${OPA_CONTROL_PLANE_PORT:-8282}:8282"
+    depends_on:
+      opa-bundles-init:
+        condition: service_completed_successfully
+
   opa:
     image: openpolicyagent/opa:0.68.0-static
     restart: unless-stopped
-    # Server mode, loading the authz bundle read-only from the repo — no
-    # bundle registry/OCI push needed for this MVP's scale. See
+    # Server mode, watching the bundle that opa-control-plane builds and
+    # publishes to the shared opa_bundles volume. See
     # backend/policies/authz.rego and docs/AUTHORIZATION.md.
     #
     # No healthcheck here: the "-static" image is a minimal, shell-less
@@ -32,11 +58,19 @@ services:
     # by design — app/core/opa.py fails closed (denies, logs an error)
     # rather than crashing, so a plain `depends_on` (container started,
     # not "healthy") is sufficient here.
-    command: ["run", "--server", "--addr", "0.0.0.0:8181", "/policies"]
+    #
+    # `--watch` on a bundle path that doesn't exist yet exits immediately,
+    # so on a cold start this container may crash-loop for a few seconds
+    # until opa-control-plane finishes its first build and writes
+    # /bundles/authz/bundle.tar.gz — `restart: unless-stopped` carries it
+    # through that window without any extra orchestration.
+    command: ["run", "--server", "--addr", "0.0.0.0:8181", "--watch", "/bundles/authz/bundle.tar.gz"]
     volumes:
-      - ./backend/policies:/policies:ro
+      - opa_bundles:/bundles:ro
     ports:
       - "${OPA_PORT:-8181}:8181"
+    depends_on:
+      - opa-control-plane
 
   backend:
     build:
@@ -85,3 +119,4 @@ volumes:
   db_data:
   uploads_data:
   skill_packages_data:
+  opa_bundles:

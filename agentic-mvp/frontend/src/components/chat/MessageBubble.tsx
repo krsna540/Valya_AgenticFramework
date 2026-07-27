@@ -11,8 +11,30 @@ interface Props {
   onSelectBranch?: (siblingId: string) => void;
   onCitationClick: (citation: Citation) => void;
   onEditSubmit?: (newContent: string) => void;
+  /** true when several agents answered the same turn and this message is
+      rendered inside a side-by-side comparison column. */
+  split?: boolean;
 }
 
+function initialsOf(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((p) => p[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+/**
+ * A single message in the Q&A thread.
+ *
+ * Deliberately asymmetric, following the pattern modern assistant UIs
+ * converged on: the *question* is a compact tinted bubble on the right,
+ * the *answer* is full-width prose on the left with an author row and no
+ * container at all. Wrapping long structured answers (headings, lists,
+ * tables, code) in a bordered balloon is what made this thread feel
+ * cramped — prose needs the full column width to breathe.
+ */
 export default function MessageBubble({
   message,
   agent,
@@ -21,79 +43,125 @@ export default function MessageBubble({
   onSelectBranch,
   onCitationClick,
   onEditSubmit,
+  split = false,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
+  const [copied, setCopied] = useState(false);
 
   const isUser = message.role === "user";
 
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard unavailable (insecure origin / denied) — silently ignore
+    }
+  }
+
   if (editing) {
     return (
-      <div className="chat-bubble user editing">
-        <textarea className="input" value={draft} onChange={(e) => setDraft(e.target.value)} rows={3} />
-        <div className="modal-actions" style={{ marginTop: 8 }}>
-          <button type="button" className="btn btn-secondary" onClick={() => setEditing(false)}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => {
-              setEditing(false);
-              onEditSubmit?.(draft);
-            }}
-          >
-            Save & regenerate
-          </button>
+      <div className="qa-ask">
+        <div className="qa-edit">
+          <textarea className="input" value={draft} onChange={(e) => setDraft(e.target.value)} rows={3} autoFocus />
+          <div className="qa-edit-actions">
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                setEditing(false);
+                onEditSubmit?.(draft);
+              }}
+            >
+              Save &amp; regenerate
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
+  // ── the question ────────────────────────────────────────────────
+  if (isUser) {
+    return (
+      <div className="qa-ask">
+        <div className="qa-ask-body">
+          {fileMeta.length > 0 && (
+            <div className="qa-files">
+              {fileMeta.map((f) => (
+                <span key={f.id} className="qa-file">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+                    <path d="M14 2v6h6" />
+                  </svg>
+                  {f.filename}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="qa-ask-text">{message.content}</div>
+        </div>
+        <div className="qa-ask-tools">
+          {onEditSubmit && (
+            <button type="button" className="qa-tool" onClick={() => setEditing(true)}>
+              Edit
+            </button>
+          )}
+          {siblings && onSelectBranch && <BranchNav siblings={siblings} onSelect={onSelectBranch} />}
+        </div>
+      </div>
+    );
+  }
+
+  // ── the answer ──────────────────────────────────────────────────
+  const name = agent?.name ?? "Agent";
   return (
-    <div className={`chat-bubble-wrap ${isUser ? "user" : "agent"}`}>
-      {!isUser && agent && <div className="bubble-agent-label">{agent.name}</div>}
-      <div className={`chat-bubble ${isUser ? "user" : "agent blueprint"} ${message.blocked ? "blocked" : ""}`}>
-        {!isUser && (
-          <>
-            <i className="corner tl" />
-            <i className="corner tr" />
-            <i className="corner bl" />
-            <i className="corner br" />
-          </>
+    <div className={`qa-answer${split ? " split" : ""}${message.blocked ? " blocked" : ""}`}>
+      <div className="qa-author">
+        <span className="qa-avatar">{initialsOf(name)}</span>
+        <span className="qa-author-name">{name}</span>
+        {message.streaming && <span className="qa-thinking">thinking…</span>}
+      </div>
+
+      <div className="qa-answer-body">
+        {message.blocked && (
+          <div className="qa-notice blocked">Response halted by a hook policy</div>
         )}
-        {fileMeta.length > 0 && (
-          <div className="attachment-row" style={{ marginBottom: 8 }}>
-            {fileMeta.map((f) => (
-              <span key={f.id} className="chip">
-                {f.filename}
-              </span>
-            ))}
+        {message.toolCall && (
+          <div className="qa-notice">
+            <span className="qa-notice-dot" />
+            Running tool <code>{message.toolCall}</code>
+          </div>
+        )}
+        {message.skillCall && (
+          <div className="qa-notice">
+            <span className="qa-notice-dot" />
+            Using skill <code>{message.skillCall}</code>
           </div>
         )}
 
-        {message.blocked && <div className="blocked-badge">🛑 blocked by a hook policy</div>}
+        <MarkdownRenderer
+          content={message.content}
+          citations={message.citations}
+          onCitationClick={onCitationClick}
+        />
 
-        {message.toolCall && (
-          <div className="tool-call-badge">⚙ executing tool: {message.toolCall}</div>
-        )}
-        {message.skillCall && (
-          <div className="tool-call-badge">🧩 activated skill: {message.skillCall}</div>
-        )}
-
-        <MarkdownRenderer content={message.content || (message.streaming ? "…" : "")} citations={message.citations} onCitationClick={onCitationClick} />
-
-        {message.streaming && <span className="stream-cursor">▍</span>}
+        {message.streaming && !message.content && <div className="qa-skeleton" aria-label="Generating response" />}
+        {message.streaming && message.content && <span className="stream-cursor">▍</span>}
       </div>
 
-      <div className="bubble-footer">
-        {isUser && onEditSubmit && (
-          <button type="button" className="bubble-action" onClick={() => setEditing(true)}>
-            Edit
+      {!message.streaming && message.content && (
+        <div className="qa-answer-tools">
+          <button type="button" className="qa-tool" onClick={copy}>
+            {copied ? "Copied" : "Copy"}
           </button>
-        )}
-        {siblings && onSelectBranch && <BranchNav siblings={siblings} onSelect={onSelectBranch} />}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
