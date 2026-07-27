@@ -1,0 +1,20 @@
+# OPA Control Plane (OCP) config: builds backend/policies/authz.rego into a
+# bundle and publishes it to the shared opa_bundles volume, which the `opa`
+# service watches and serves. See docs/AUTHORIZATION.md §6.
+#
+# No `database:` block: OCP defaults to an in-memory SQLite store for its own
+# state (source/bundle definitions), which is fine here since this repo's
+# config.d file is itself the source of truth and gets reloaded on restart.
+bundles:
+  authz:
+    object_storage:
+      filesystem:
+        path: /bundles/authz/bundle.tar.gz
+    requirements:
+      - source: authz
+
+sources:
+  authz:
+    directory: /policies
+    paths:
+      - authz.rego
