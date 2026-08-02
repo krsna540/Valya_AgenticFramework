@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# macOS Finder metadata. Written into any directory the Finder browses, so it
+# reappears constantly and has no business in the repo. Two were already
+# tracked (docs/, journey_canvas/) before this rule existed and were removed
+# from the index with `git rm --cached` — an ignore rule alone does not untrack
+# a file that is already committed.
+.DS_Store
+**/.DS_Store

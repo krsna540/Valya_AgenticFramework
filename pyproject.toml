@@ -28,6 +28,13 @@ ignore = [
     "UP042", # prefer `enum.StrEnum` (3.11-only) over `class X(str, enum.Enum)` — same
              # 3.10-compatibility rationale as UP017 above; `str, enum.Enum` also matches
              # SQLAlchemy's Enum(values_callable=...) pattern used in app/models/.
+    "UP041", # rewrite `asyncio.TimeoutError` to the builtin `TimeoutError`. Only
+             # equivalent on 3.11+, where asyncio.TimeoutError became an alias. On
+             # 3.10 they are *distinct* classes, so the autofix turns
+             # `except (asyncio.TimeoutError, TimeoutError)` into a clause that
+             # silently stops catching asyncio timeouts — a node timeout then
+             # escapes its handler instead of becoming an AgentTimeoutError.
+             # Same 3.10-compatibility rationale as UP017/UP042 above.
 ]
 
 [tool.ruff.lint.isort]

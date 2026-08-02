@@ -63,6 +63,31 @@ app.include_router(models.router, prefix=settings.api_v1_prefix)
 app.include_router(chat.router, prefix=settings.api_v1_prefix)
 
 
+@app.on_event("shutdown")
+async def _release_agent_runtime_resources() -> None:
+    """Release the long-lived connections the agent runtime holds.
+
+    Both are process-wide singletons created lazily on first use — the
+    LangGraph Postgres checkpointer owns a psycopg connection pool, and the
+    Temporal client owns a gRPC channel. Neither is tied to a request, so
+    without an explicit shutdown they are only reclaimed when the process
+    dies, which leaks connections across a reload in development and delays
+    a clean container stop in production.
+
+    Best-effort and independently guarded: a failure releasing one must not
+    prevent the other from being released, and neither should turn a normal
+    shutdown into a non-zero exit.
+    """
+    from app.agents.checkpointer import close_checkpointer
+    from app.agents.durable.client import close_client
+
+    for name, closer in (("checkpointer", close_checkpointer), ("temporal client", close_client)):
+        try:
+            await closer()
+        except Exception:  # noqa: BLE001 — shutdown must not fail
+            logging.getLogger("agentic_mvp").exception("Error releasing the agent %s", name)
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}

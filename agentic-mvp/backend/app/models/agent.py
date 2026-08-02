@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, ForeignKey, String, Table, Text
+from sqlalchemy import JSON, Column, ForeignKey, String, Table, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,6 +39,20 @@ class Agent(RegistryMixin, TenantScopedMixin, Base):
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     model_name: Mapped[str] = mapped_column(String(255), default="stub-echo", nullable=False)
     owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+
+    # Per-agent tuning for the Planner -> Executor -> Critic runtime: revision
+    # and replan budgets, node timeouts, whether the critic runs at all,
+    # whether tools may actually be invoked. Validated into an
+    # `AgentRuntimeConfig` at run start (app/agents/config.py), which drops
+    # unknown keys and falls back to defaults on a malformed value — a bad
+    # admin edit degrades one agent's tuning rather than 500-ing chat.
+    #
+    # Empty dict = "use the defaults", which is what every existing row gets
+    # from the migration. Deployment-wide settings (gateway URL, whether
+    # Temporal is on) deliberately live in app/core/config.py instead, so a
+    # tenant admin can tune budgets without being able to repoint the model
+    # gateway.
+    runtime_config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
     owner = relationship("User")
     skills = relationship("Skill", secondary="agent_skills")

@@ -19,6 +19,11 @@ PyYAML==6.0.2
 # app/services/llm_gateway.py).
 langgraph==1.2.9
 langgraph-checkpoint-postgres==3.1.0
+# langgraph-checkpoint-postgres talks psycopg3, not the psycopg2 driver
+# SQLAlchemy uses above — the two coexist deliberately (see
+# app/agents/checkpointer.py, which strips the `+psycopg2` marker from
+# settings.database_url so both point at the same database).
+psycopg[binary]==3.2.3
 temporalio==1.30.0
 mlflow[genai]==3.10.*
 qdrant-client==1.18.0

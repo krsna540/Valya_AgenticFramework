@@ -1,0 +1,23 @@
+# Temporal dynamic config for local development.
+#
+# Mounted at /etc/temporal/config/dynamicconfig and pointed at by
+# DYNAMIC_CONFIG_FILE_PATH in docker-compose.yml. This file must exist: when
+# DYNAMIC_CONFIG_FILE_PATH names a path that isn't there, the server fails at
+# startup rather than falling back to defaults — a failure that reads as a
+# generic config error and is easy to misattribute to the database wiring.
+
+# Temporal's default max ID length (workflow ids, task queue names) is smaller
+# than the ids this app generates: workflow ids are "agent-run-<uuid4>", which
+# is 46 characters, and task queue / namespace names are configurable by an
+# operator. 255 is what Temporal's own development config uses.
+limit.maxIDLength:
+  - value: 255
+    constraints: {}
+
+# Development only. Makes a newly registered search attribute visible to reads
+# immediately instead of after the cache TTL, so a fresh `docker compose up`
+# doesn't spend its first minute returning empty workflow lists in the UI.
+# Do not enable this in production — it turns every read into a cache refresh.
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}

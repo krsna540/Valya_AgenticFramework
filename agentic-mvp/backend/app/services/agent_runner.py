@@ -1,67 +1,152 @@
-"""Agent execution abstraction — streaming version, now hook-aware across the
-full 10-stage lifecycle taxonomy.
+"""Streaming adapter between the chat SSE contract and the agent runtime.
 
-Still a deterministic stub (see the note below), shaped as an async generator
-of structured events matching the FastAPI event-name contract the frontend
-listens for: stream_start, token, tool_call, skill_call, stream_end.
+This module used to *be* the agent: a deterministic stub that echoed the
+prompt. It is now a thin translation layer, and everything that reasons lives
+in `app/agents/`. What it still owns is the part that is genuinely about
+chat rather than about agents:
 
-`skill_call` used to mean "a Skill's real handler_key-bound BaseSkill.execute()
-ran" (see git history / [[project_agentic_mvp_nexusclaw_manifest_conventions]]
-if this needs revisiting) — that whole handler_key/BaseSkill catalog was
-retired in favor of making the SKILL.md-folder format the only Skill
-definition, which this app never executes (see app/api/routes/skills.py's
-module docstring). `skill_call` is repurposed below to mean "a Skill was
-activated for context" (its SKILL.md excerpt surfaced), not "ran".
+  1. **The wire contract.** The frontend listens for `stream_start`, `token`,
+     `tool_call`, `skill_call`, `stream_end`. The runtime emits a richer
+     vocabulary (`plan_ready`, `critique_ready`, `node_retry`, ...). This
+     module maps one onto the other. Unmapped runtime events are dropped
+     rather than forwarded, so adding a lifecycle event can never break a
+     deployed frontend.
 
-Every call now runs through the lifecycle hook pipeline (app/services/hooks.py):
+  2. **The hook pipeline.** All ten stages fire exactly where they did
+     before, so every existing Hook row keeps working unchanged:
 
-  - UserPromptSubmit can inspect/mutate the incoming task, or halt generation
-    entirely by raising HookHaltException (caught here, ends the turn with a
-    fallback message).
-  - PreToolUse runs before the demo tool_call and before the skill invocation;
-    a halt here is caught locally and just skips that one action rather than
-    ending the turn, since blocking one tool call shouldn't necessarily cancel
-    the whole response.
-  - PostToolUse.Success / PostToolUse.Failure run right after each of those,
-    keyed off whether the action actually succeeded (a skill's zero-crash
-    BaseSkill.execute() contract means "failure" here is detected by checking
-    for a SKILL_EXECUTION_ERROR-prefixed result, not an exception).
-  - PostToolUse.Success also runs on the assembled final message (was
-    before_message_send) — pii_redactor/telemetry_observer live here.
+        UserPromptSubmit  -> before the run starts, on the raw prompt; a
+                             Deny still ends the turn with a fallback.
+        PreToolUse        -> before each tool/skill activation the *agents*
+                             decide to make. This is the real improvement
+                             over the stub, which fired it once against a
+                             hardcoded "first attached tool".
+        PostToolUse.*     -> after each, keyed on success/failure, and once
+                             more on the assembled final message.
+        Notification      -> on any denial or fault.
 
-Stop (was after_agent_step) is triggered by the caller (api/routes/chat.py)
-once the message is actually persisted, since it needs the saved message
-id/duration that only exists after this generator finishes. SessionStart
-fires once per conversation in chat.py's create_conversation, not per turn.
+     SessionStart, SubagentStart/Stop and Stop stay with the caller
+     (api/routes/chat.py), which is where their trigger points live.
 
-To plug in a real model later, replace the generation logic below (the
-"full_text" construction and token loop) with calls into your LLM provider's
-streaming API — the hook pipeline and event shapes don't need to change.
+  3. **Blocking semantics.** A PreToolUse denial skips that one action; a
+     UserPromptSubmit denial ends the turn. Unchanged from the stub, because
+     that distinction was already correct.
+
+**Why the hook gate isn't inside the executor.** The agents are transport-
+agnostic — they run identically inside a Temporal activity where the hook
+engine's request-scoped context does not exist. Gating here keeps the agents
+free of chat concerns and keeps the hook pipeline in one place. The cost is
+that a hook denial arrives as an injected observation rather than as a
+pre-emptive block; `_ToolGateSink` documents that trade in full.
 """
-import asyncio
+from __future__ import annotations
+
+import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from app.agents.durable import get_runner
+from app.agents.lifecycle import (
+    CompositeEventSink,
+    EventSink,
+    EventType,
+    LifecycleEvent,
+)
+from app.agents.runtime import AgentRunRequest
 from app.models.agent import Agent
 from app.models.file import UploadedFile
-from app.services.hooks import HookContext, HookHaltException, HookManager, MessagePayload, notify
+from app.services import agent_run_store
+from app.services.hooks import (
+    HookContext,
+    HookHaltException,
+    HookManager,
+    MessagePayload,
+    notify,
+)
+
+logger = logging.getLogger("agentic_mvp.agent_runner")
 
 
-async def _run_pre_tool_use(
-    hook_manager: HookManager, hook_context: HookContext, tool_name: str, extra: dict[str, Any]
-) -> dict[str, Any] | None:
-    """Runs the PreToolUse pipeline for one tool/skill invocation. Returns the
-    (possibly modified) payload dict to proceed with, or None if a hook
-    denied it — in which case the caller should skip the action, not the
-    whole turn."""
-    payload = {"tool_name": tool_name, **extra}
-    try:
-        return await hook_manager.trigger_pipeline("PreToolUse", payload, hook_context)
-    except HookHaltException as halt:
-        await notify(hook_manager, hook_context, {"stage": "PreToolUse", "tool_name": tool_name, "reason": halt.fallback_message})
-        return None
+class _ToolGateSink(EventSink):
+    """Runs the PreToolUse / PostToolUse hook stages for tool and skill
+    activations the agents perform.
+
+    **The honest limitation.** A `tool_call` event is emitted by the executor
+    immediately before it invokes the tool, and this sink observes it
+    asynchronously — so a Deny here records the denial and surfaces it to the
+    user, but does not roll back a call already in flight. That is acceptable
+    for the shipped default (`execute_tools=false`, so nothing leaves the
+    process) and is *not* acceptable for an agent with real tool execution
+    enabled. For that case the gate belongs in `ToolInvoker.invoke`, where it
+    can genuinely refuse; see app/agents/tools.py. Recording the constraint
+    here rather than implying a guarantee that doesn't hold.
+    """
+
+    def __init__(self, manager: HookManager, context: HookContext) -> None:
+        self._manager = manager
+        self._context = context
+        self.denied: list[str] = []
+
+    async def _write(self, event: LifecycleEvent) -> None:
+        if event.type not in (EventType.TOOL_CALL, EventType.SKILL_CALL):
+            return
+        kind = "tool" if event.type == EventType.TOOL_CALL else "skill"
+        name = str(event.data.get("tool_name") or event.data.get("skill_name") or "")
+        if not name:
+            return
+
+        try:
+            await self._manager.trigger_pipeline(
+                "PreToolUse",
+                {"tool_name": name, "kind": kind, "step_id": event.data.get("step_id")},
+                self._context,
+            )
+        except HookHaltException as halt:
+            self.denied.append(f"{kind} '{name}': {halt.fallback_message}")
+            await notify(
+                self._manager,
+                self._context,
+                {"stage": "PreToolUse", "tool_name": name, "reason": halt.fallback_message},
+            )
+            await self._manager.trigger_pipeline(
+                "PostToolUse.Failure",
+                {"tool_name": name, "kind": kind, "reason": "denied by policy"},
+                self._context,
+            )
+            return
+
+        await self._manager.trigger_pipeline(
+            "PostToolUse.Success", {"tool_name": name, "kind": kind}, self._context
+        )
+
+
+def _citations_from_files(attached_files: list[UploadedFile]) -> list[dict[str, str]]:
+    """Build the citation list the chat UI renders.
+
+    Still derived from the attached files rather than from real retrieval —
+    the runtime accepts `context_documents` and will cite whatever is passed,
+    so wiring the Retrieval Service in is a change at the call site, not here.
+    """
+    return [
+        {
+            "id": f"doc_{idx:02d}",
+            "source": f.filename,
+            "snippet": (
+                f"Attached document {f.filename}. Wire the Retrieval Service into "
+                "chat.py's context_documents to replace this placeholder snippet."
+            ),
+        }
+        for idx, f in enumerate(attached_files, start=1)
+    ]
+
+
+def _context_documents(attached_files: list[UploadedFile]) -> list[dict[str, Any]]:
+    return [
+        {"title": f.filename, "snippet": f"(content of {f.filename} not yet extracted)"}
+        for f in attached_files
+    ]
 
 
 async def stream_agent_response(
@@ -71,15 +156,26 @@ async def stream_agent_response(
     hook_manager: HookManager,
     hook_context: HookContext,
 ) -> AsyncGenerator[dict[str, Any], None]:
+    """Run one chat turn through the agent graph, yielding SSE-shaped events.
+
+    Signature and emitted event shapes are unchanged from the stub this
+    replaced, so `api/routes/chat.py` needed no modification.
+    """
     agent_id = str(agent.id)
     started_at = time.monotonic()
+    run_id = uuid.uuid4()
 
     yield {"type": "stream_start", "agent_id": agent_id}
 
+    # --- UserPromptSubmit: guardrails, DLP, prompt rewriting ----------------
     try:
         task = await hook_manager.trigger_pipeline("UserPromptSubmit", user_message, hook_context)
     except HookHaltException as halt:
-        await notify(hook_manager, hook_context, {"stage": "UserPromptSubmit", "reason": halt.fallback_message})
+        await notify(
+            hook_manager,
+            hook_context,
+            {"stage": "UserPromptSubmit", "reason": halt.fallback_message},
+        )
         yield {
             "type": "stream_end",
             "agent_id": agent_id,
@@ -90,104 +186,159 @@ async def stream_agent_response(
         }
         return
 
-    # Demo tool-call event: if the agent has tools attached, "use" the first
-    # one so the UI's expandable tool-call affordance has something to show.
-    # Gated by PreToolUse/PostToolUse.Success so those stages are genuinely
-    # exercised, not just defined.
-    tool_blocked_note = ""
-    if agent.tools:
-        tool = agent.tools[0]
-        gated = await _run_pre_tool_use(hook_manager, hook_context, tool.name, {"kind": "tool"})
-        if gated is None:
-            tool_blocked_note = f" (Tool '{tool.name}' was blocked by policy before it ran.)"
-        else:
-            yield {"type": "tool_call", "agent_id": agent_id, "tool_name": tool.name}
-            await asyncio.sleep(0.4)
-            await hook_manager.trigger_pipeline("PostToolUse.Success", {"tool_name": tool.name, "kind": "tool"}, hook_context)
-
-    # Skill "activation": no BaseSkill/handler_key catalog exists anymore
-    # (see this module's docstring), so there is nothing to actually run —
-    # skills are instructional content an agent loads progressively, per the
-    # Agent Skills spec. This emits skill_call for the first attached skill
-    # to stand in for "activation" until this runner has a real tool-calling
-    # loop that can decide which skills to load and when.
-    invoked_skill_name: str | None = None
-    skill_blocked_note = ""
-    if agent.skills:
-        first_skill = agent.skills[0]
-        gated = await _run_pre_tool_use(hook_manager, hook_context, first_skill.name, {"kind": "skill"})
-        if gated is None:
-            skill_blocked_note = f" (Skill '{first_skill.name}' was blocked by policy before it activated.)"
-        else:
-            invoked_skill_name = first_skill.name
-            yield {"type": "skill_call", "agent_id": agent_id, "skill_name": first_skill.name}
-            await asyncio.sleep(0.3)
-            await hook_manager.trigger_pipeline(
-                "PostToolUse.Success", {"tool_name": first_skill.name, "kind": "skill"}, hook_context
-            )
-
-    capabilities = []
-    if agent.skills:
-        # Progressive disclosure, "metadata" tier (per the Agent Skills
-        # spec): name + description only, always visible — the full
-        # SKILL.md body is loaded below only for the first one, standing in
-        # for "activation".
-        capabilities.append(f"skills: {', '.join(f'{s.name} ({s.description})' for s in agent.skills)}")
-    if agent.tools:
-        capabilities.append(f"tools: {', '.join(t.name for t in agent.tools)}")
-    if agent.plugins:
-        capabilities.append(f"plugins: {', '.join(p.name for p in agent.plugins)}")
-    if agent.hooks:
-        capabilities.append(f"hooks: {', '.join(h.name for h in agent.hooks)}")
-    capability_note = f" I have access to {'; '.join(capabilities)}." if capabilities else ""
-
-    skill_note = ""
-    if invoked_skill_name is not None:
-        activated = agent.skills[0]
-        skill_note = (
-            f" Activating skill '{activated.name}' — its SKILL.md instructions "
-            f"(first 200 chars): {activated.body_markdown.strip()[:200]!r}"
-        )
-
-    citations: list[dict[str, str]] = []
-    citation_note = ""
-    if attached_files:
-        for idx, f in enumerate(attached_files, start=1):
-            citations.append(
-                {
-                    "id": f"doc_{idx:02d}",
-                    "source": f.filename,
-                    "snippet": (
-                        f"Demo snippet from {f.filename} — wire real text "
-                        "extraction/RAG into agent_runner.py to replace this."
-                    ),
-                }
-            )
-        refs = " ".join(f"[{i}]" for i in range(1, len(citations) + 1))
-        citation_note = f" Based on your attached file(s) {refs}."
-
-    full_text = (
-        f"[{agent.name} | {agent.model_name} stub] You said: \"{task}\"."
-        f"{capability_note}{citation_note}{skill_note}{tool_blocked_note}{skill_blocked_note} "
-        "This is a placeholder response — wire a real model into app/services/agent_runner.py to get live answers."
+    # Snapshot the agent's registry associations on this (synchronous) thread
+    # before any concurrency starts — the graph runs in tasks that must never
+    # trigger a lazy load against the shared Session.
+    request = AgentRunRequest.from_agent(
+        agent,
+        objective=task,
+        language=str(hook_context.metadata.get("language") or "en"),
+        context_documents=_context_documents(attached_files),
+        conversation_id=hook_context.conversation_id,
+        user_id=hook_context.user_id,
+        run_id=str(run_id),
+        trace_id=hook_context.trace_id,
     )
 
-    for word in full_text.split(" "):
-        yield {"type": "token", "agent_id": agent_id, "text": word + " "}
-        await asyncio.sleep(0.02)
+    gate = _ToolGateSink(hook_manager, hook_context)
+    persist = agent_run_store.PersistingEventSink(run_id)
+    sink = CompositeEventSink(gate, persist)
 
-    message = MessagePayload(sender=agent.name, recipient="user", content=full_text)
+    agent_run_store.create_run(
+        run_id=run_id,
+        agent_id=agent.id,
+        objective=task,
+        trace_id=hook_context.trace_id,
+        tenant_id=agent.tenant_id,
+        user_id=_maybe_uuid(hook_context.user_id),
+        conversation_id=_maybe_uuid(hook_context.conversation_id),
+        language=request.language,
+        model_name=agent.model_name,
+        runtime_config=request.config.model_dump(),
+        thread_id=request.thread_id or str(run_id),
+    )
+
+    # Interactive chat takes the in-process path: the caller is holding an SSE
+    # connection open, so durability buys nothing here and token-level
+    # streaming only exists locally. See app/agents/durable/selector.py.
+    runner = get_runner(prefer_local=True)
+
+    final_answer = ""
+    final_event: LifecycleEvent | None = None
+    citations = _citations_from_files(attached_files)
+
+    try:
+        async for event in runner.stream(request, extra_sink=sink):
+            wire = _to_wire_event(event, agent_id)
+            if wire is not None:
+                yield wire
+            if event.type == EventType.RUN_END and event.data.get("final"):
+                final_event = event
+                final_answer = str(event.data.get("final_answer") or "")
+    except Exception as exc:  # noqa: BLE001 — the turn's fault boundary
+        logger.exception("Agent run %s failed", run_id)
+        await notify(hook_manager, hook_context, {"stage": "agent_execution", "error": str(exc)})
+        final_answer = (
+            "This request could not be completed because the agent runtime "
+            "encountered an unexpected error."
+        )
+
+    if gate.denied:
+        final_answer += "\n\n" + "\n".join(f"(Blocked by policy — {d})" for d in gate.denied)
+
+    # --- PostToolUse.Success on the assembled message ----------------------
+    # Where pii_redactor / telemetry_observer run, exactly as before.
+    message = MessagePayload(sender=agent.name, recipient="user", content=final_answer)
     message = await hook_manager.trigger_pipeline("PostToolUse.Success", message, hook_context)
 
+    duration_ms = int((time.monotonic() - started_at) * 1000)
     hook_context.metadata["tokens"] = message.tokens
-    hook_context.metadata["duration_ms"] = int((time.monotonic() - started_at) * 1000)
+    hook_context.metadata["duration_ms"] = duration_ms
+
+    runtime = getattr(runner, "runtime", None)
+    run_result = getattr(runtime, "last_result", None) if runtime is not None else None
+    if run_result is not None:
+        await agent_run_store.finalize_run(
+            run_id,
+            run_result.state,  # type: ignore[arg-type]
+            duration_ms=duration_ms,
+            citations=citations,
+        )
+        hook_context.metadata["agent_run_id"] = str(run_id)
+        hook_context.metadata["critic_verdict"] = run_result.critic_verdict
+        hook_context.metadata["revisions"] = run_result.revisions
 
     yield {
         "type": "stream_end",
         "agent_id": agent_id,
         "content": message.content,
         "citations": citations,
-        "message_id": str(uuid.uuid4()),  # overwritten by the route with the real persisted id
+        "message_id": str(uuid.uuid4()),  # overwritten by the route with the persisted id
         "blocked": False,
         "tokens": message.tokens,
+        # Extra keys are additive: the existing frontend ignores what it
+        # doesn't read, and the Run Observatory reads these.
+        "run_id": str(run_id),
+        "status": (final_event.data.get("status") if final_event else "failed"),
+        "revisions": (run_result.revisions if run_result else 0),
+        "critic_verdict": (run_result.critic_verdict if run_result else None),
+        "needs_human_review": (run_result.needs_human_review if run_result else False),
     }
+
+
+def _to_wire_event(event: LifecycleEvent, agent_id: str) -> dict[str, Any] | None:
+    """Map a runtime lifecycle event onto the frontend's SSE vocabulary.
+
+    Returns None for events with no wire equivalent. An allowlist rather than
+    a passthrough: a new lifecycle event should never reach a frontend that
+    doesn't know how to render it.
+    """
+    if event.type == EventType.TOKEN:
+        return {"type": "token", "agent_id": agent_id, "text": event.data.get("text", "")}
+
+    if event.type == EventType.TOOL_CALL:
+        return {
+            "type": "tool_call",
+            "agent_id": agent_id,
+            "tool_name": event.data.get("tool_name"),
+            "step_id": event.data.get("step_id"),
+        }
+
+    if event.type == EventType.SKILL_CALL:
+        return {
+            "type": "skill_call",
+            "agent_id": agent_id,
+            "skill_name": event.data.get("skill_name"),
+            "step_id": event.data.get("step_id"),
+        }
+
+    # Progress events. `agent_status` is a new event name the current
+    # frontend simply doesn't subscribe to, so emitting it is safe today and
+    # gives the Run Observatory a live feed to render tomorrow.
+    if event.type in (
+        EventType.PLAN_READY,
+        EventType.STEP_START,
+        EventType.STEP_END,
+        EventType.CRITIQUE_READY,
+        EventType.REVISION_START,
+        EventType.HUMAN_REVIEW_REQUIRED,
+    ):
+        return {
+            "type": "agent_status",
+            "agent_id": agent_id,
+            "stage": event.type.value,
+            "phase": event.phase,
+            "revision": event.revision,
+            **event.data,
+        }
+
+    return None
+
+
+def _maybe_uuid(value: str | None) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except (ValueError, TypeError):
+        return None

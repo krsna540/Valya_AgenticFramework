@@ -5,6 +5,7 @@ from app.models.datasource import Datasource
 from app.models.project import Project, project_datasources, project_users
 from app.models.skill import Skill, agent_skills
 from app.models.agent import Agent, agent_hooks, agent_plugins, agent_tools
+from app.models.agent_run import AgentRun, AgentRunStep
 from app.models.tool import Tool
 from app.models.plugin import Plugin
 from app.models.hook import Hook
@@ -27,6 +28,8 @@ __all__ = [
     "project_users",
     "project_datasources",
     "Agent",
+    "AgentRun",
+    "AgentRunStep",
     "agent_skills",
     "agent_tools",
     "agent_plugins",

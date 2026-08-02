@@ -187,7 +187,7 @@ crashing if OPA isn't ready yet, so a strict health gate isn't necessary for
 correctness).
 
 `opa` no longer loads `backend/policies/` directly. A second service,
-`opa-control-plane` (`openpolicyagent/opa-control-plane:edge`, config at
+`opa-control-plane` (`openpolicyagent/opa-control-plane:v0.7.0`, config at
 `opa-control-plane/ocp.yml`), builds `backend/policies/authz.rego` into a
 compiled bundle and writes it to the `opa_bundles` named volume shared by
 both containers; `opa` runs `run --server --watch /bundles/authz/bundle.tar.gz`
@@ -196,12 +196,64 @@ to pick up and re-serve that bundle whenever opa-control-plane rebuilds it
 `object_storage` pattern — for cloud deployments the same `ocp.yml` bundle
 can point at S3/GCS/Azure instead, with `opa` polling that store over HTTP
 via its own `services`/`bundles` config, without changing anything on the
-`backend` side. OCP itself needs no external database for this MVP: with no
-`database:` block in `ocp.yml` it falls back to an in-memory SQLite store
-for its own source/bundle definitions, since `ocp.yml` (checked into the
-repo) is already the durable source of truth and gets reloaded on every
-restart. OCP's management/metrics API is exposed on `OPA_CONTROL_PLANE_PORT`
-(default `8282`) but nothing in this app calls it yet.
+`backend` side.
+
+### 6.1 OCP's own database, and `--apply-migrations`
+
+OCP keeps its own state — the source and bundle definitions it is working
+from — in a SQL database. With no `database:` block in `ocp.yml` that is an
+**in-memory SQLite** store, which suits this deployment: `ocp.yml` is checked
+into the repo and is already the durable source of truth, so OCP's copy is a
+cache that can be rebuilt from scratch on every boot.
+
+What that arrangement *requires*, and what was missing here, is
+`--apply-migrations` on `opactl run`. An in-memory database starts empty every
+time, so unless migrations run at startup the schema never exists. Without the
+flag OCP does not fail loudly: it warns about unapplied migrations and then, in
+the upstream wording, "attempts to use the database as-is". The observable
+result is a cascade that looks nothing like its cause —
+
+1. OCP starts and appears healthy, but never publishes a bundle.
+2. `opa run --watch` exits immediately on the missing bundle path and
+   crash-loops, backing off exponentially.
+3. `app/core/opa.py` fails closed, as designed.
+4. **Every** admin-gated route returns 403, and the app looks like it has a
+   permissions bug rather than a container that never started.
+
+Upstream's own manifest carries the flag with the note "single OCP instance can
+run migrations on startup", which is exactly this deployment. A multi-instance
+rollout should instead run `opactl db migrate` out of band and drop the flag,
+so two instances can't race the same migration.
+
+### 6.2 Startup ordering
+
+`opa` does not depend on opa-control-plane merely having *started* — that is a
+race, and losing it means a crash-loop whose backoff can outlast the build that
+triggered it. A one-shot `opa-bundle-wait` container blocks until the bundle
+exists and passes `gzip -t`, and `opa` waits for that to complete. "The bundle
+is readable" is a truer readiness signal than any healthcheck on OCP, since
+that artifact is the only thing `opa` actually consumes. It times out after
+120s with a pointer to `docker compose logs opa-control-plane`.
+
+Both named volumes (`opa_bundles`, `opa_data`) are chowned to uid 1000 by the
+`opa-bundles-init` container first: Docker creates named volumes root-owned,
+and the OCP image runs as uid 1000 (upstream `Dockerfile`: `ARG USER=1000:1000`).
+Missing the chown on `--data-dir` produces a permissions failure that reads
+like a config error.
+
+### 6.3 Image pinning and API exposure
+
+The image is pinned to a release tag rather than `:edge`. `edge` tracks the tip
+of `main` and is rebuilt continuously, so an unpinned stack can break with no
+change on our side. When bumping it, check the flags against
+`docs/k8s-manifests.yaml` at the matching upstream tag.
+
+OCP's management API (`OPA_CONTROL_PLANE_PORT`, default `8282`) is bound to
+`127.0.0.1` only. It runs unauthenticated here — there is no `tokens:` block in
+`ocp.yml` — and it can rewrite the bundle that authorizes every request in this
+app, so it should not reach a shared interface without tokens configured first.
+Nothing in this app calls it; `curl localhost:8282/v1/bundles` still works from
+the host for debugging.
 
 **This sandbox cannot run or download OPA** (no docker; GitHub release-asset
 downloads are blocked by the sandbox's network allowlist), so the Rego

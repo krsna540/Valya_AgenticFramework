@@ -1,6 +1,47 @@
+# Knowledge Nexus / Valya — the whole stack, one file.
+#
+#     docker compose up --build
+#
+# Ten containers, no profiles and no flags: everything needed to exercise the
+# app end to end starts by default. Three of them are one-shot setup/gate
+# containers that run and exit — `docker compose ps` showing them as `exited
+# (0)` is success, not failure.
+#
+# Once up:
+#   Frontend            http://localhost:3000
+#   Backend API + docs  http://localhost:8000/docs
+#   Temporal UI         http://localhost:8080
+#   OPA (decisions)     http://localhost:8181
+#   OCP (bundle build)  http://localhost:8282   (loopback only, see below)
+#
+# Startup order is enforced with health gates rather than `sleep`, so the
+# stack is either up and correct or it fails loudly. The chain is:
+#
+#   db ─healthy─┬─> opa-bundles-init ─exit0─> opa-control-plane ─┐
+#               │                                                │
+#               │                        opa-bundle-wait <───────┘
+#               │                              │ exit 0
+#               │                              v
+#               ├─────────────────────────>  opa ─started─> backend ─healthy─┬─> frontend
+#               │                                                            │
+#               └─> temporal ─healthy───────────────────────────────────────>├─> agent-worker
+#                        └─> temporal-ui
+#
+# Everything is pinned to a released tag whose amd64 *and* arm64 builds were
+# verified on Docker Hub — this runs natively on Apple Silicon, no emulation.
+
 name: agentic-mvp
 
 services:
+  # ---------------------------------------------------------------------------
+  # Data
+  # ---------------------------------------------------------------------------
+
+  # One Postgres instance backs three independent schemas, which is why there
+  # is no second database container: the app's own tables (Alembic-managed),
+  # LangGraph's checkpoint tables (created by the library's own setup()), and
+  # Temporal's two databases (created by auto-setup). Keeping them together
+  # means one thing to back up and one thing to wait on.
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -19,62 +60,193 @@ services:
       timeout: 5s
       retries: 10
 
-  # Named volumes are created root-owned, but the opa-control-plane image
-  # runs as uid 1000 (see its Dockerfile) and needs write access under
-  # /bundles — this one-shot container fixes ownership before it starts.
+  # ---------------------------------------------------------------------------
+  # Authorization — OPA + OPA Control Plane
+  #
+  # OCP compiles backend/policies/authz.rego into a bundle on the shared
+  # opa_bundles volume; opa watches that path and serves decisions from it.
+  # See docs/AUTHORIZATION.md §6.
+  # ---------------------------------------------------------------------------
+
+  # One-shot. Docker creates named volumes root-owned, but the OCP image runs
+  # as uid 1000 (upstream Dockerfile: `ARG USER=1000:1000`) and writes to BOTH
+  # of its volumes: /bundles (published artifact) and /data (working state).
+  # Missing the /data chown produces a permissions failure that reads like a
+  # config error, so both are fixed here before OCP starts.
   opa-bundles-init:
     image: busybox:1.36
-    command: ["chown", "-R", "1000:1000", "/bundles"]
+    command: ["chown", "-R", "1000:1000", "/bundles", "/data"]
     volumes:
       - opa_bundles:/bundles
+      - opa_data:/data
 
   opa-control-plane:
-    image: openpolicyagent/opa-control-plane:edge
+    # Pinned, not `:edge`. `edge` tracks the tip of main and is rebuilt
+    # continuously, so an unpinned stack can break overnight with no change on
+    # our side. When bumping, re-check the flags below against
+    # docs/k8s-manifests.yaml at the matching upstream tag.
+    image: openpolicyagent/opa-control-plane:v0.7.0
     restart: unless-stopped
-    # Builds backend/policies/authz.rego into a bundle (per ocp.yml) and
-    # writes it to the opa_bundles volume; the opa service below watches
-    # that path and serves the compiled bundle. See docs/AUTHORIZATION.md §6.
-    command: ["run", "--addr=0.0.0.0:8282", "--config=/config/ocp.yml", "--data-dir=/tmp", "--log-level=info"]
+    #
+    # --apply-migrations is REQUIRED. OCP keeps its own state (source/bundle
+    # definitions) in a SQL database — by default an in-memory SQLite one that
+    # starts empty on every boot. Without this flag the schema is never
+    # created; OCP does not fail loudly but warns and then "attempts to use the
+    # database as-is", publishes no bundle, and the failure surfaces four steps
+    # downstream as every admin route returning 403. Upstream's own manifest
+    # carries the flag with the note "single OCP instance can run migrations on
+    # startup", which is exactly this deployment. For a multi-instance rollout,
+    # run `opactl db migrate` out of band and drop the flag instead.
+    #
+    # --data-dir is a real volume rather than /tmp: the image is a minimal base
+    # running as a non-root user, so /tmp is not a dependable scratch location,
+    # and working state does not belong in one anyway.
+    command:
+      - "run"
+      - "--addr=0.0.0.0:8282"
+      - "--config=/config/ocp.yml"
+      - "--data-dir=/data"
+      - "--apply-migrations"
+      - "--log-level=info"
     volumes:
       - ./opa-control-plane/ocp.yml:/config/ocp.yml:ro
       - ./backend/policies:/policies:ro
       - opa_bundles:/bundles
+      - opa_data:/data
     ports:
-      - "${OPA_CONTROL_PLANE_PORT:-8282}:8282"
+      # Loopback only. OCP's management API can rewrite the bundle that
+      # authorizes every request in this app, and it runs unauthenticated here
+      # (no `tokens:` block in ocp.yml). `curl localhost:8282/v1/bundles` still
+      # works from the host; the LAN cannot reach it. Configure `tokens:`
+      # before exposing this on a shared interface.
+      - "127.0.0.1:${OPA_CONTROL_PLANE_PORT:-8282}:8282"
     depends_on:
       opa-bundles-init:
         condition: service_completed_successfully
 
+  # One-shot gate. `opa run --watch <missing path>` exits immediately, so
+  # without this opa crash-loops on every cold start — and Docker backs
+  # restarts off exponentially, so a slow first build can leave OPA down far
+  # longer than the build itself took. Waiting on the artifact is also a truer
+  # readiness signal than any healthcheck on OCP: what opa needs is not "OCP is
+  # listening", it is "the bundle exists and is readable".
+  opa-bundle-wait:
+    image: busybox:1.36
+    command:
+      - "sh"
+      - "-c"
+      - |
+        BUNDLE=/bundles/authz/bundle.tar.gz
+        echo "Waiting for $$BUNDLE ..."
+        i=0
+        # `gzip -t` rather than a mere existence check: if OCP writes the
+        # tarball in place rather than atomically, a non-empty file can still
+        # be a partial one, and releasing opa against a truncated bundle
+        # trades a clean wait for a confusing decompression error.
+        while ! gzip -t "$$BUNDLE" 2>/dev/null; do
+          i=$$((i+1))
+          if [ $$i -gt 120 ]; then
+            echo "Timed out after 120s waiting for $$BUNDLE." >&2
+            echo "Check: docker compose logs opa-control-plane" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        echo "Bundle published and readable after $${i}s."
+    volumes:
+      - opa_bundles:/bundles:ro
+    depends_on:
+      opa-control-plane:
+        condition: service_started
+
   opa:
     image: openpolicyagent/opa:0.68.0-static
     restart: unless-stopped
-    # Server mode, watching the bundle that opa-control-plane builds and
-    # publishes to the shared opa_bundles volume. See
-    # backend/policies/authz.rego and docs/AUTHORIZATION.md.
-    #
-    # No healthcheck here: the "-static" image is a minimal, shell-less
-    # binary (no wget/curl to exec a CMD healthcheck with), and the
-    # backend already tolerates OPA being briefly unavailable at startup
-    # by design — app/core/opa.py fails closed (denies, logs an error)
-    # rather than crashing, so a plain `depends_on` (container started,
-    # not "healthy") is sufficient here.
-    #
-    # `--watch` on a bundle path that doesn't exist yet exits immediately,
-    # so on a cold start this container may crash-loop for a few seconds
-    # until opa-control-plane finishes its first build and writes
-    # /bundles/authz/bundle.tar.gz — `restart: unless-stopped` carries it
-    # through that window without any extra orchestration.
+    # No healthcheck: the "-static" image is a shell-less binary with no
+    # wget/curl to exec a CMD healthcheck against, and app/core/opa.py already
+    # fails closed (denies and logs) rather than crashing if OPA is briefly
+    # unavailable. The bundle gate above is what makes the ordering correct.
     command: ["run", "--server", "--addr", "0.0.0.0:8181", "--watch", "/bundles/authz/bundle.tar.gz"]
     volumes:
       - opa_bundles:/bundles:ro
     ports:
       - "${OPA_PORT:-8181}:8181"
     depends_on:
-      - opa-control-plane
+      # Gated on the bundle existing, not merely on OCP having started.
+      opa-bundle-wait:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # Durable execution — Temporal
+  #
+  # The envelope around agent runs (app/agents/durable/). Interactive chat
+  # still runs in-process by design — token streaming only exists on that path
+  # — so Temporal is what carries long, resumable, or human-gated work.
+  # ---------------------------------------------------------------------------
+
+  temporal:
+    image: temporalio/auto-setup:1.29.7
+    restart: unless-stopped
+    environment:
+      # Shares the app's Postgres rather than running a second instance.
+      # auto-setup creates both databases on first boot; the POSTGRES_USER
+      # below owns the instance, so it has the CREATEDB rights to do so.
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: db
+      POSTGRES_USER: ${POSTGRES_USER:-agentic}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-agentic}
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      # Must name a file that exists — see temporal/dynamicconfig/ for why.
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CLI_ADDRESS: temporal:7233
+    volumes:
+      - ./temporal/dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    ports:
+      - "${TEMPORAL_PORT:-7233}:7233"
+    # A TCP probe via bash's /dev/tcp rather than the temporal/tctl CLI: it
+    # depends on nothing but the shell the image already runs its entrypoint
+    # with, so it cannot wedge the stack if a future image reshuffles which
+    # CLI binaries ship. It proves the frontend service is accepting
+    # connections; the worker's own retry loop covers the brief window after
+    # that in which the `default` namespace is still being registered.
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/7233' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      db:
+        condition: service_healthy
+
+  temporal-ui:
+    image: temporalio/ui:2.53.0
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:${TEMPORAL_UI_PORT:-8080}
+    ports:
+      - "${TEMPORAL_UI_PORT:-8080}:8080"
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Application
+  # ---------------------------------------------------------------------------
 
   backend:
     build:
       context: ./backend
+    # Named explicitly so agent-worker can declare the same image and compose
+    # builds it once. Beyond the build time, this makes it impossible for the
+    # API and the worker to drift onto different builds of the same code —
+    # they share a database schema and a set of activity definitions, so a
+    # version skew between them is a genuinely confusing class of bug.
+    image: agentic-mvp-backend:local
     restart: unless-stopped
     environment:
       ENVIRONMENT: development
@@ -88,6 +260,26 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
       CORS_ORIGINS: '["http://localhost:${FRONTEND_PORT:-3000}","http://localhost:5173"]'
       OPA_URL: http://opa:8181
+      # --- agent runtime (app/agents/) ---
+      # Defaults to the offline stub provider so a plain `docker compose up`
+      # runs the Planner->Executor->Critic graph end to end with no
+      # credentials. Set AGENT_LLM_PROVIDER=gateway plus AGENT_LLM_GATEWAY_URL
+      # to route generation through the MLflow AI Gateway instead.
+      AGENT_LLM_PROVIDER: ${AGENT_LLM_PROVIDER:-stub}
+      AGENT_LLM_GATEWAY_URL: ${AGENT_LLM_GATEWAY_URL:-}
+      AGENT_LLM_API_KEY: ${AGENT_LLM_API_KEY:-}
+      # Postgres checkpointing makes runs resumable across a restart. Degrades
+      # to in-memory with a warning if it can't be provisioned, so this being
+      # on never blocks startup — see app/agents/checkpointer.py.
+      AGENT_CHECKPOINTER: ${AGENT_CHECKPOINTER:-postgres}
+      # On, because Temporal is part of this stack now. Chat still takes the
+      # in-process path regardless (app/agents/durable/selector.py passes
+      # prefer_local=True); this is what makes the durable path available to
+      # everything else.
+      TEMPORAL_ENABLED: ${TEMPORAL_ENABLED:-true}
+      TEMPORAL_HOST: temporal:7233
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-valya-agents}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
@@ -104,19 +296,73 @@ services:
       timeout: 5s
       retries: 10
 
+  # Executes agent graphs off the Temporal task queue. A separate process from
+  # the API by design: a worker polls continuously and runs graphs that take
+  # minutes, which would otherwise compete with request handling on the same
+  # event loop and tie worker capacity to web capacity.
+  agent-worker:
+    build:
+      context: ./backend
+    # Same image as `backend` (see the note there) — built once, and the two
+    # can never run different builds of the same code.
+    image: agentic-mvp-backend:local
+    restart: unless-stopped
+    # Overrides entrypoint.sh, which runs migrations then uvicorn. Deliberate:
+    # the API owns migrations, the worker only polls the task queue.
+    entrypoint: ["python", "-m", "app.agents.durable.worker"]
+    environment:
+      ENVIRONMENT: development
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-agentic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic}
+      POSTGRES_DB: ${POSTGRES_DB:-agentic}
+      AGENT_LLM_PROVIDER: ${AGENT_LLM_PROVIDER:-stub}
+      AGENT_LLM_GATEWAY_URL: ${AGENT_LLM_GATEWAY_URL:-}
+      AGENT_LLM_API_KEY: ${AGENT_LLM_API_KEY:-}
+      AGENT_CHECKPOINTER: ${AGENT_CHECKPOINTER:-postgres}
+      TEMPORAL_ENABLED: "true"
+      TEMPORAL_HOST: temporal:7233
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-valya-agents}
+    volumes:
+      - uploads_data:/app/data/uploads
+      - skill_packages_data:/app/data/skill_packages
+    depends_on:
+      db:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      # The API owns migrations (entrypoint.sh runs `alembic upgrade head`),
+      # so the worker waits for it rather than racing it on a cold start —
+      # two processes attempting the same migration is the classic way to
+      # deadlock a first boot.
+      backend:
+        condition: service_healthy
+
   frontend:
     build:
       context: ./frontend
       args:
+        # Vite bakes this in at build time, so changing it needs a rebuild
+        # (`docker compose up --build frontend`), not just a restart.
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   db_data:
   uploads_data:
   skill_packages_data:
+  # Bundles published by opa-control-plane and read by opa.
   opa_bundles:
+  # opa-control-plane's own working directory (--data-dir). Separate from
+  # opa_bundles because only OCP touches it, and because wiping working state
+  # to force a clean rebuild should not also delete the artifact opa is
+  # currently serving: removing agentic-mvp_opa_data leaves authorization up
+  # until the rebuild lands.
+  opa_data:
