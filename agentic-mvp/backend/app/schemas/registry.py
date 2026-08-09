@@ -33,6 +33,13 @@ class RegistryRead(RegistryBase):
 
     id: uuid.UUID
     tenant_id: uuid.UUID | None = None
+    # migration 0016 — PLATFORM_ARCHITECTURE.md §7.2's two access-modifier
+    # axes, exposed on every registry Read schema that derives from this
+    # base (Hook, and any future make_registry_router() adopter).
+    access_class: str = "custom"
+    visibility: str = "private"
+    forked_from_id: uuid.UUID | None = None
+    owner_user_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
 

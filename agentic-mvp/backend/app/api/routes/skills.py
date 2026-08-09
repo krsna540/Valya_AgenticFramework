@@ -23,6 +23,8 @@ history and the no-stored-code rationale (this is intentionally the "safe"
 end of this app's skill-sharing spectrum — same posture as before, just one
 format instead of two).
 """
+import asyncio
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -35,10 +37,12 @@ from app.api.deps import authorize, get_current_user, get_current_user_flexible
 from app.core import opa
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.minio_client import put_blob
 from app.core.tenant_scope import apply_shared_or_own_tenant, is_visible
 from app.models.skill import Skill
 from app.models.user import User
 from app.schemas.skill import SkillRead, SkillUpdate
+from app.services.registry_access import fork_row
 from app.skills.package_extract import SkillPackageExtractError, extract_skill_zip, zip_package
 from app.skills.package_spec import (
     SkillPackageValidationError,
@@ -47,6 +51,32 @@ from app.skills.package_spec import (
 )
 
 router = APIRouter(prefix="/skills", tags=["skills"])
+logger = logging.getLogger("agentic_mvp.api.skills")
+
+
+def _mirror_to_minio(extracted_root: Path, file_manifest: list[str]) -> dict[str, str]:
+    """Best-effort content-addressed copy of every extracted file into MinIO
+    (app/core/minio_client.py). Synchronous `minio` SDK calls, so this is run
+    via asyncio.to_thread from the async upload route rather than blocking
+    the event loop — see minio_client.py's module docstring.
+
+    Never raises: a MinIO outage must not fail a skill upload that already
+    succeeded on local disk. Returns {} (not partial results) on any
+    failure, so a caller never mistakes a half-mirrored skill for a fully
+    verified one.
+    """
+    digests: dict[str, str] = {}
+    try:
+        for rel_path in file_manifest:
+            file_path = extracted_root / rel_path
+            if not file_path.is_file():
+                continue
+            digest = put_blob(settings.minio_skills_bucket, file_path.read_bytes())
+            digests[rel_path] = digest
+    except Exception:  # noqa: BLE001 — mirroring must never fail the upload
+        logger.warning("MinIO mirror failed for skill upload (dir=%s) — continuing with local disk only", extracted_root, exc_info=True)
+        return {}
+    return digests
 
 
 def _skill_dir(skill_id: uuid.UUID) -> Path:
@@ -139,6 +169,8 @@ async def upload_skill(
         }
         hooks = parsed_json.hooks
 
+    blob_digests = await asyncio.to_thread(_mirror_to_minio, extracted.extracted_path, extracted.file_manifest)
+
     skill = Skill(
         id=skill_id,
         name=parsed.name,
@@ -155,6 +187,7 @@ async def upload_skill(
         hooks=hooks,
         dir_path=str(extracted.extracted_path),
         file_manifest=extracted.file_manifest,
+        blob_digests=blob_digests,
         uploaded_by=current_user.id,
         tenant_id=current_user.tenant_id,
     )
@@ -256,3 +289,26 @@ def delete_skill(skill_id: uuid.UUID, db: Session = Depends(get_db), current_adm
     db.delete(skill)
     db.commit()
     return None
+
+
+@router.post("/{skill_id}/fork", response_model=SkillRead, status_code=status.HTTP_201_CREATED)
+def fork_skill(skill_id: uuid.UUID, db: Session = Depends(get_db), current_admin: User = Depends(authorize("skill", "create"))) -> Skill:
+    """PLATFORM_ARCHITECTURE.md §7.5/§8.7 fork-and-override, applied to the
+    one registry kind whose content is files on disk rather than JSON
+    columns. fork_row() copies every declared column including dir_path/
+    file_manifest, so the new row initially POINTS AT THE SAME EXTRACTED
+    DIRECTORY as its source — correct as long as neither row's SKILL.md/
+    scripts are ever edited in place (update_skill above only ever touches
+    metadata columns like name/description/status, never dir_path's
+    contents, so this holds for now). A real copy-on-fork of the extracted
+    directory is the natural next step once file-content editing exists —
+    tracked as a known gap, not silently papered over.
+    """
+    source = _visible_or_404(db, current_admin, skill_id)
+    if current_admin.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Super admin has no tenant of their own to fork into")
+    forked = fork_row(source, new_tenant_id=current_admin.tenant_id, owner_user_id=current_admin.id, model_cls=Skill)
+    db.add(forked)
+    db.commit()
+    db.refresh(forked)
+    return forked

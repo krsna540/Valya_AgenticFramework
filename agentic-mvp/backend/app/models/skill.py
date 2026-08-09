@@ -74,4 +74,13 @@ class Skill(RegistryMixin, TenantScopedMixin, Base):
     dir_path: Mapped[str] = mapped_column(String(1000), nullable=False)
     file_manifest: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
 
+    # Content-addressed mirror in MinIO — {relative file path: "sha256:<hex>"}
+    # — written alongside (not instead of) dir_path at upload time. See
+    # app/core/minio_client.py's module docstring for exactly what's wired
+    # here vs deferred (serving still reads from dir_path; this is a
+    # verifiable extra copy, not yet the source of truth). Best-effort: a
+    # MinIO outage at upload time leaves this {} rather than failing the
+    # upload, same non-blocking posture as redis_client.py.
+    blob_digests: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
     uploaded_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)

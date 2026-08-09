@@ -10,6 +10,14 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- MLflow's tracking-server tables (experiments/runs/metrics/...) live in
+-- their own schema rather than `public`, so they never risk colliding by
+-- name with an Alembic-managed app table — see docker-compose.yml's
+-- `mlflow` service, which points its --backend-store-uri at this schema
+-- via `?options=-csearch_path=mlflow`. MLflow creates its own tables
+-- inside it on first boot; this script only needs the schema to exist.
+CREATE SCHEMA IF NOT EXISTS mlflow;
+
 -- Sanity check row so `docker compose logs db` shows init ran.
 DO $$
 BEGIN

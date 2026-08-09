@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import sys
 
@@ -5,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
+    admin_overview,
     admin_users,
     agents,
     auth,
@@ -12,13 +14,18 @@ from app.api.routes import (
     datasources,
     files,
     hooks,
+    manifests,
     models,
     personas,
     platform,
+    platform_catalog,
+    platform_rules,
+    playbooks,
     plugins,
     policies,
     projects,
     prompts,
+    runs,
     skills,
     tenants,
     tools,
@@ -61,6 +68,41 @@ app.include_router(prompts.router, prefix=settings.api_v1_prefix)
 app.include_router(files.router, prefix=settings.api_v1_prefix)
 app.include_router(models.router, prefix=settings.api_v1_prefix)
 app.include_router(chat.router, prefix=settings.api_v1_prefix)
+app.include_router(playbooks.router, prefix=settings.api_v1_prefix)
+app.include_router(runs.router, prefix=settings.api_v1_prefix)
+app.include_router(manifests.router, prefix=settings.api_v1_prefix)
+app.include_router(admin_overview.router, prefix=settings.api_v1_prefix)
+app.include_router(platform_catalog.router, prefix=settings.api_v1_prefix)
+app.include_router(platform_rules.router, prefix=settings.api_v1_prefix)
+
+
+@app.on_event("startup")
+async def _ensure_minio_buckets() -> None:
+    """Idempotent bucket creation for the skill blob mirror (see
+    app/core/minio_client.py). A `minio-init` one-shot container in
+    docker-compose does this too, before backend ever starts — this is a
+    second, harmless call so `ensure_bucket`'s own docstring ("safe to call
+    repeatedly") is actually exercised, and so the app is self-healing if
+    ever run outside that compose file. Non-fatal if MinIO isn't reachable
+    yet: ensure_bucket already logs and swallows (see its own try/except).
+    """
+    from app.core.minio_client import ensure_bucket
+
+    await asyncio.to_thread(ensure_bucket, settings.minio_skills_bucket)
+
+
+@app.on_event("startup")
+async def _init_agent_tracing() -> None:
+    """Point MLflow tracing at the tracking server so agent execution (every
+    Planner/Executor/Critic run started through the chat SSE path or the
+    /runs API, in-process here or replayed via a Temporal activity — see the
+    matching call in durable/worker.py) is logged as a trace. See
+    app/agents/tracing.py for the fault-isolation contract; this call itself
+    can never fail the app's startup.
+    """
+    from app.agents.tracing import init_tracing
+
+    await asyncio.to_thread(init_tracing)
 
 
 @app.on_event("shutdown")
@@ -80,8 +122,13 @@ async def _release_agent_runtime_resources() -> None:
     """
     from app.agents.checkpointer import close_checkpointer
     from app.agents.durable.client import close_client
+    from app.core.redis_client import close_redis
 
-    for name, closer in (("checkpointer", close_checkpointer), ("temporal client", close_client)):
+    for name, closer in (
+        ("checkpointer", close_checkpointer),
+        ("temporal client", close_client),
+        ("redis client", close_redis),
+    ):
         try:
             await closer()
         except Exception:  # noqa: BLE001 — shutdown must not fail

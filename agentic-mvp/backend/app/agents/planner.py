@@ -42,6 +42,7 @@ from app.agents.state import (
     RunPhase,
     get_critique,
     get_plan,
+    resolve_model_route,
 )
 from app.agents.tools import SkillSpec, ToolSpec
 
@@ -146,7 +147,7 @@ class PlannerAgent(BaseAgent):
         for attempt in range(1, MAX_REPAIR_ATTEMPTS + 2):
             request = LLMRequest(
                 messages=conversation,
-                model=str(state.get("scratchpad", {}).get("model_route") or "default"),
+                model=resolve_model_route(state, "planner"),
                 purpose="planner",
                 temperature=0.1,  # planning wants consistency, not creativity
                 max_tokens=1200,

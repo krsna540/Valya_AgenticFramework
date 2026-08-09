@@ -107,9 +107,13 @@ allow if {
 # Read-only visibility into the resource types the chat application itself
 # needs to render: which agents exist, which projects this user is mapped
 # to (project membership itself is still enforced in SQL — see
-# app/api/routes/projects.py::_get_project), and prompt templates for the
-# "/" quick-insert picker.
-_user_readable_types := {"agent", "project", "prompt"}
+# app/api/routes/projects.py::_get_project), prompt templates for the
+# "/" quick-insert picker, and — added for user-app.html's "Sources"
+# screen ("What the assistant is allowed to read") — datasource metadata.
+# Read-only and tenant-scoped, same as the rest of this set: a user sees
+# what sources exist and their status, never connection secrets (those
+# aren't in the DatasourceRead response body to begin with).
+_user_readable_types := {"agent", "project", "prompt", "run", "datasource"}
 
 allow if {
 	input.subject.role == "user"
@@ -122,5 +126,31 @@ allow if {
 allow if {
 	input.subject.role == "user"
 	input.resource.type == "chat"
+	input.resource.tenant_id == input.subject.tenant_id
+}
+
+# A user may resolve (start a session against) their own tenant's manifest
+# — this is the capability-document handoff PLATFORM_ARCHITECTURE.md §6
+# describes, gated the same way starting a chat conversation already is.
+allow if {
+	input.subject.role == "user"
+	input.resource.type == "manifest"
+	input.action in {"read", "create"}
+	input.resource.tenant_id == input.subject.tenant_id
+}
+
+# Resolving an ESCALATE/awaiting-human run (PLATFORM_ARCHITECTURE.md §9.6's
+# HUMAN_RESOLVED touchpoint) — approve/decline is a "decide" action, not a
+# generic "update", so it does not fall under the admin-only write rule
+# above. Any user in the tenant may decide, same as any workspace member
+# can see the approval card in user-app.html's plan panel — a real
+# deployment would likely narrow this to workspace owners (see the
+# admin-app.html "Who can approve: Owners only" setting, which is UI-level
+# in this build, not yet enforced here — yet another documented, not
+# silently dropped, gap).
+allow if {
+	input.subject.role in {"user", "admin"}
+	input.resource.type == "run"
+	input.action == "decide"
 	input.resource.tenant_id == input.subject.tenant_id
 }

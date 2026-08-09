@@ -54,7 +54,16 @@ class Agent(RegistryMixin, TenantScopedMixin, Base):
     # gateway.
     runtime_config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
-    owner = relationship("User")
+    # `foreign_keys` must be explicit: `RegistryAccessMixin` (via
+    # `TenantScopedMixin`, added migration 0016 — see mixins.py) put two more
+    # FK columns to users.id on this table (owner_user_id,
+    # reviewed_by_user_id) alongside this pre-existing owner_id, so
+    # SQLAlchemy can no longer infer which one `.owner` means. Left
+    # unqualified, `configure_mappers()` — triggered by the first query
+    # anywhere in the app, not necessarily one that touches Agent — raises
+    # AmbiguousForeignKeysError and every request 500s, which is exactly
+    # what surfaced this (a plain signup query touching User, not Agent).
+    owner = relationship("User", foreign_keys=[owner_id])
     skills = relationship("Skill", secondary="agent_skills")
     tools = relationship("Tool", secondary=agent_tools)
     plugins = relationship("Plugin", secondary=agent_plugins)

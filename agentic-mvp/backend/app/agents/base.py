@@ -68,6 +68,7 @@ from app.agents.state import (
     transition,
 )
 from app.agents.tools import ToolInvoker
+from app.agents.tracing import set_span_attributes, set_span_outputs, traced_span
 
 logger = logging.getLogger("agentic_mvp.agents")
 
@@ -227,8 +228,40 @@ class BaseAgent(ABC):
     async def _invoke_instrumented(self, state: AgentState) -> AgentOutcome:
         """Thin seam that carries the decorator stack. Kept separate from
         `_invoke` so a subclass overriding `_invoke` can't accidentally drop
-        the instrumentation by forgetting to re-apply the decorator."""
-        return await self._invoke(state)
+        the instrumentation by forgetting to re-apply the decorator.
+
+        Also where the MLflow AGENT span is opened — one per node execution,
+        nested under the run's root span (see runtime.py) via MLflow's own
+        contextvar propagation, so a single trace tree shows exactly what
+        `@instrumented`'s NODE_START/NODE_END events show the SSE stream,
+        just persisted and queryable in the MLflow UI instead of ephemeral.
+        Opened here rather than by `@instrumented` itself so it wraps only
+        the real work — retries each get their own span via the LLM calls
+        inside `_invoke`, not a fresh AGENT span per attempt.
+        """
+        ctx = self._ctx
+        with traced_span(
+            f"agent.{self.role.value}",
+            span_type="AGENT",
+            inputs={
+                "objective": state.get("objective"),
+                "revision": ctx.revision if ctx else 0,
+            },
+            attributes={
+                "agent.role": self.role.value,
+                "agent.phase": self.phase.value,
+                "agent.run_id": ctx.run_id if ctx else "",
+                "agent.agent_id": ctx.agent_id or "" if ctx else "",
+                "agent.agent_name": ctx.agent_name or "" if ctx else "",
+                "agent.revision": ctx.revision if ctx else 0,
+            },
+        ) as span:
+            outcome = await self._invoke(state)
+            set_span_outputs(
+                span, {"summary": outcome.summary, "next_phase": (outcome.next_phase or self.phase).value}
+            )
+            set_span_attributes(span, {"agent.payload_keys": list(outcome.payload.keys())})
+            return outcome
 
     # --- subclass contract --------------------------------------------------
 

@@ -5,16 +5,19 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.models.mixins import RegistryMixin
+from app.models.mixins import RegistryAccessMixin, RegistryMixin
 
 
-class Hook(RegistryMixin, Base):
+class Hook(RegistryMixin, RegistryAccessMixin, Base):
     __tablename__ = "hooks"
 
     # NULL = platform-shared (visible/attachable by every tenant), same
     # nullable-tenant convention as TenantScopedMixin — Hook predates that
     # mixin (already had its own version/status columns) so tenant_id is
-    # added directly here instead of retrofitting the mixin.
+    # added directly here instead of retrofitting the mixin. access_class/
+    # visibility/forked_from_*/owner_user_id come from RegistryAccessMixin
+    # directly (migration 0016) since Hook can't pick them up via
+    # TenantScopedMixin without duplicate version/status columns.
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
 
     # "global"  -> auto-applied to every agent's pipeline, no attachment needed

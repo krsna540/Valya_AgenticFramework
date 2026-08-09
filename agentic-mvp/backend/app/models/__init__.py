@@ -17,8 +17,17 @@ from app.models.model_route import ModelRoute
 from app.models.usage_event import UsageEvent
 from app.models.audit_log import AuditLog
 from app.models.policy import Policy, UserPolicyMapping
+from app.models.playbook import Playbook
+from app.models.event import Event
+from app.models.manifest import Manifest, ManifestSession
+from app.models.policy_revision import PolicyRevision
 
 __all__ = [
+    "Playbook",
+    "Event",
+    "Manifest",
+    "ManifestSession",
+    "PolicyRevision",
     "Tenant",
     "User",
     "Persona",

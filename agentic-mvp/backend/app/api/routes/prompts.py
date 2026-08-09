@@ -9,6 +9,7 @@ from app.core.tenant_scope import apply_shared_or_own_tenant, is_visible
 from app.models.prompt import Prompt
 from app.models.user import User
 from app.schemas.prompt import PromptCreate, PromptRead, PromptUpdate
+from app.services.registry_access import fork_row
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
 
@@ -83,3 +84,20 @@ def delete_prompt(prompt_id: uuid.UUID, db: Session = Depends(get_db), current_a
     db.delete(prompt)
     db.commit()
     return None
+
+
+@router.post("/{prompt_id}/fork", response_model=PromptRead, status_code=status.HTTP_201_CREATED)
+def fork_prompt(prompt_id: uuid.UUID, db: Session = Depends(get_db), current_admin: User = Depends(authorize("prompt", "create"))) -> PromptRead:
+    """PLATFORM_ARCHITECTURE.md §7.5 — copy a default/public prompt into a
+    new custom+protected row this admin's tenant owns, recording
+    provenance via forked_from_id/forked_from_version. The source is never
+    modified (a fork of a `default` row is exactly how a tenant is meant to
+    customize platform-shipped content — see §7.3's mutation matrix)."""
+    source = _visible_or_404(db, current_admin, prompt_id)
+    if current_admin.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Super admin has no tenant of their own to fork into")
+    forked = fork_row(source, new_tenant_id=current_admin.tenant_id, owner_user_id=current_admin.id, model_cls=Prompt)
+    db.add(forked)
+    db.commit()
+    db.refresh(forked)
+    return PromptRead.model_validate(forked)

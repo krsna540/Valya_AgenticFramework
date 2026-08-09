@@ -63,6 +63,16 @@ def _sandbox_runner() -> SandboxedWorkflowRunner:
 
 
 async def main() -> None:
+    # Same tracing init as the API process (app/main.py's startup hook) — a
+    # durable run's agent-node/LLM spans are opened by the same base.py /
+    # llm.py code whether the activity executes here or in-process, so both
+    # entry points need to have pointed the mlflow client at the tracking
+    # server before any run reaches them. Best-effort; never blocks worker
+    # startup (see app/agents/tracing.py's fault-isolation contract).
+    from app.agents.tracing import init_tracing
+
+    init_tracing()
+
     client = await get_client()
     worker = Worker(
         client,

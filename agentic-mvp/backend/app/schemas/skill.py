@@ -19,6 +19,10 @@ class SkillRead(BaseModel):
     description: str | None
     is_active: bool
     version: str
+    access_class: str = "custom"
+    visibility: str = "private"
+    forked_from_id: uuid.UUID | None = None
+    owner_user_id: uuid.UUID | None = None
     status: str
     license: str | None
     compatibility: str | None
@@ -26,6 +30,9 @@ class SkillRead(BaseModel):
     allowed_tools: str | None
     body_markdown: str
     file_manifest: list[str]
+    # {relative path: "sha256:<hex>"} — the MinIO mirror, empty if MinIO was
+    # unreachable at upload time. See app/api/routes/skills.py::_mirror_to_minio.
+    blob_digests: dict[str, str] = Field(default_factory=dict)
     # skill.json-derived fields (see app/skills/package_spec.py) — empty/
     # default when the skill has no skill.json.
     triggers: SkillTriggers

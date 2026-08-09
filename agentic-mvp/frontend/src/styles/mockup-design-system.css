@@ -1,0 +1,281 @@
+/* ============================================================
+   Design system extracted from the three uploaded mockups —
+   superadmin-app.html, admin-app.html, user-app.html — verbatim
+   where the three agree (which is almost everywhere: identical
+   :root tokens, identical component classes for tables/tags/buttons/
+   cards). Not yet wired into the app; this is the source of truth
+   for the frontend rebuild (Super Admin / Admin / User shells), kept
+   separate from the currently-live src/styles/index.css (the older
+   "Hive" reskin) so nothing in the running app changes until that
+   rebuild actually happens.
+
+   Per-role differentiation is NOT a different palette — all three
+   mockups share one palette and one type system. The only per-role
+   visual differences are:
+     - Super Admin: dark chrome nav rail (--a900 background) — see
+       .rail.role-superadmin below.
+     - Admin: mid-steel nav rail (--a600 background) — .rail.role-admin.
+     - User: no rail at all — a top tab bar (.tabs/.tab) instead,
+       because the user app is workspace/chat-centric rather than a
+       settings-table-centric admin console.
+   ============================================================ */
+
+:root {
+  /* Base surface + text */
+  --mds-bg: #f2f2f3;
+  --mds-text: #1d1f20;
+
+  /* Accent ramp (steel blue) — 100 lightest to 900 darkest */
+  --mds-a100: #eef6ff;
+  --mds-a200: #d6ebff;
+  --mds-a300: #b5d9fd;
+  --mds-a400: #94bce3;
+  --mds-a500: #749dc4;
+  --mds-a600: #597ea3;
+  --mds-a700: #416180;
+  --mds-a800: #2c455d;
+  --mds-a900: #1d2d3d;
+
+  /* Neutral ramp */
+  --mds-n100: #f5f5f8;
+  --mds-n200: #e7e7ea;
+  --mds-n300: #d5d5d7;
+  --mds-n400: #b7b7ba;
+  --mds-n500: #98989b;
+  --mds-n600: #7a7a7d;
+  --mds-n700: #5d5d60;
+  --mds-n800: #424244;
+
+  /* Type */
+  --mds-font-head: "Barlow Condensed", sans-serif;
+  --mds-font-body: "Barlow", sans-serif;
+
+  color-scheme: light;
+}
+
+/* ── Base resets (scoped to .mds-root so this file can be imported
+   alongside the existing index.css without a global reset fight) ── */
+
+.mds-root {
+  font-family: var(--mds-font-body);
+  color: var(--mds-text);
+  background: var(--mds-bg);
+  font-size: 15px;
+}
+.mds-root * { box-sizing: border-box; }
+.mds-root ::selection { background: var(--mds-a200); }
+.mds-root a { color: var(--mds-a700); }
+.mds-root a:hover { color: var(--mds-a900); }
+.mds-root h1, .mds-root h2, .mds-root h3 {
+  font-family: var(--mds-font-head);
+  font-weight: 600;
+  margin: 0;
+}
+.mds-root button { font-family: var(--mds-font-body); cursor: pointer; }
+.mds-root input,
+.mds-root textarea,
+.mds-root select {
+  font-family: var(--mds-font-body);
+  font-size: 15px;
+  color: var(--mds-text);
+  background: var(--mds-bg);
+  border: 1px solid var(--mds-n400);
+  padding: 9px 12px;
+}
+.mds-root input:focus,
+.mds-root textarea:focus { outline: none; border-color: var(--mds-a500); }
+.mds-root :focus-visible { outline: 2px solid var(--mds-a500); outline-offset: 2px; }
+
+/* No border-radius anywhere in any of the three mockups — sharp
+   corners throughout is a deliberate, consistent choice, not an
+   oversight. Do not add radius to components ported from this file. */
+
+/* ── App shell: sidebar layout (Super Admin / Admin) ── */
+
+.mds-app { height: 100vh; display: flex; overflow: hidden; }
+
+.mds-rail {
+  width: 236px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  color: var(--mds-bg);
+}
+.mds-rail.role-superadmin { background: var(--mds-a900); }
+.mds-rail.role-admin {
+  background: var(--mds-a600);
+  border-right: 1px solid var(--mds-a800);
+}
+.mds-rail .top { padding: 20px 20px 18px; border-bottom: 1px solid var(--mds-a800); }
+.mds-rail.role-admin .top { border-bottom-color: var(--mds-a700); }
+.mds-rail .org { font-family: var(--mds-font-head); font-size: 19px; font-weight: 600; }
+.mds-rail .me { font-size: 12.5px; opacity: .8; margin-top: 2px; }
+.mds-rail .items {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 12px 10px; display: flex; flex-direction: column; gap: 2px;
+}
+.mds-rail .foot {
+  padding: 16px; border-top: 1px solid var(--mds-a800);
+  font-size: 12.5px; opacity: .8; line-height: 1.5;
+}
+.mds-rail.role-admin .foot { border-top-color: var(--mds-a700); }
+
+.mds-navbtn {
+  text-align: left; border: none; background: transparent;
+  color: var(--mds-bg); font-size: 14px; padding: 10px 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.mds-rail.role-superadmin .mds-navbtn:hover { background: var(--mds-a800); }
+.mds-rail.role-admin .mds-navbtn:hover { background: var(--mds-a700); }
+.mds-navbtn.on { background: var(--mds-bg); color: var(--mds-a900); }
+.mds-navbtn .badge { font-size: 11.5px; opacity: .75; }
+
+.mds-screen { flex: 1; min-width: 0; overflow: auto; padding: 48px 56px; }
+
+/* ── App shell: top-tab layout (User) ── */
+
+.mds-app-tabs { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+.mds-tabs {
+  flex: none; display: flex; align-items: center; gap: 4px;
+  padding: 0 20px; height: 44px;
+  border-bottom: 1px solid var(--mds-n300); background: var(--mds-n100);
+}
+.mds-tabs .brand {
+  font-family: var(--mds-font-head); font-size: 11px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--mds-n700); margin-right: 14px;
+}
+.mds-tab { border: none; background: transparent; color: var(--mds-n800); font-size: 13px; padding: 6px 13px; }
+.mds-tab:hover { background: var(--mds-n200); }
+.mds-tab.on { background: var(--mds-a700); color: var(--mds-bg); }
+
+/* ── Typography helpers ── */
+
+.mds-kicker {
+  font-family: var(--mds-font-head); font-size: 12px; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--mds-n700);
+}
+.mds-muted { color: var(--mds-n700); }
+.mds-lead { font-size: 15.5px; line-height: 1.6; color: var(--mds-n800); margin: 0; }
+
+/* ── Buttons ── */
+
+.mds-btn {
+  border: 1px solid var(--mds-a700); background: transparent; color: var(--mds-a700);
+  padding: 10px 20px; font-size: 14px;
+}
+.mds-btn:hover { background: var(--mds-a100); }
+.mds-btn:active { background: var(--mds-a200); }
+.mds-btn-primary { background: var(--mds-a700); color: var(--mds-bg); border-color: var(--mds-a700); }
+.mds-btn-primary:hover { background: var(--mds-a600); }
+.mds-btn-primary:active { background: var(--mds-a800); }
+.mds-btn-sm { padding: 8px 16px; font-size: 13px; }
+.mds-btn-block { width: 100%; }
+.mds-icon-btn { border: none; background: transparent; color: var(--mds-text); padding: 8px; line-height: 0; }
+.mds-icon-btn:hover { background: var(--mds-n200); }
+
+/* ── Tags / chips ── */
+
+.mds-tag {
+  display: inline-block; font-size: 10.5px; letter-spacing: .04em;
+  text-transform: uppercase; padding: 3px 8px; border: 1px solid transparent;
+}
+.mds-tag-accent { background: var(--mds-a200); color: var(--mds-a900); }
+.mds-tag-neutral { background: var(--mds-n200); color: var(--mds-n800); }
+.mds-tag-outline { border-color: var(--mds-n500); color: var(--mds-n800); }
+
+.mds-chip { border: 1px solid var(--mds-n400); background: transparent; color: var(--mds-n800); font-size: 13px; padding: 7px 15px; }
+.mds-chip.on { background: var(--mds-a700); border-color: var(--mds-a700); color: var(--mds-bg); }
+
+/* ── Stat strip (Overview / Platform health) ── */
+
+.mds-stats {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  border-top: 1px solid var(--mds-n400); border-bottom: 1px solid var(--mds-n400);
+}
+.mds-stats > div { padding: 22px 24px; border-right: 1px solid var(--mds-n300); }
+.mds-stats > div:last-child { border-right: none; }
+.mds-stats .v { font-family: var(--mds-font-head); font-size: 38px; font-weight: 600; line-height: 1; }
+.mds-stats .l { font-size: 13.5px; color: var(--mds-n700); margin-top: 8px; }
+
+/* ── Tables / list rows (the dominant layout primitive — used for
+   tenants, catalog, models, audit log, workspaces, everything) ── */
+
+.mds-table-head {
+  display: flex; gap: 22px; padding: 0 12px 10px;
+  font-family: var(--mds-font-head); font-size: 11.5px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--mds-n700); border-bottom: 1px solid var(--mds-n400);
+}
+.mds-row {
+  display: flex; gap: 22px; align-items: center; padding: 16px 12px;
+  border-bottom: 1px solid var(--mds-n300); cursor: pointer;
+}
+.mds-row:hover { background: var(--mds-n100); }
+.mds-grow { flex: 1; min-width: 220px; }
+.mds-fix { flex: none; }
+.mds-rname { font-family: var(--mds-font-head); font-size: 16px; font-weight: 600; }
+.mds-rsub { font-size: 13px; color: var(--mds-n700); margin-top: 2px; }
+
+.mds-bar { height: 5px; background: var(--mds-n300); }
+.mds-bar > i { display: block; height: 100%; background: var(--mds-a500); }
+
+/* ── Cards / alerts / tabbar ── */
+
+.mds-card { border: 1px solid var(--mds-n300); padding: 20px 24px; }
+.mds-alert { border-left: 2px solid var(--mds-a700); padding: 14px 18px; margin-bottom: 10px; background: var(--mds-n100); }
+.mds-alert.low { border-left-color: var(--mds-n500); }
+
+.mds-tabbar { display: flex; gap: 2px; border-bottom: 1px solid var(--mds-n400); }
+.mds-tabbar button {
+  border: none; border-bottom: 2px solid transparent; background: transparent;
+  color: var(--mds-n700); font-size: 14px; padding: 10px 18px; margin-bottom: -1px;
+}
+.mds-tabbar button.on { border-bottom-color: var(--mds-a700); color: var(--mds-a900); }
+
+.mds-avatar {
+  width: 32px; height: 32px; flex: none; background: var(--mds-a200); color: var(--mds-a900);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mds-font-head); font-size: 13px; font-weight: 600;
+}
+
+/* ── Chat workspace (User app only) ── */
+
+.mds-ws { flex: 1; min-height: 0; display: flex; overflow: hidden; width: 100%; }
+.mds-side { width: 264px; flex: none; border-right: 1px solid var(--mds-n300); display: flex; flex-direction: column; overflow: hidden; }
+.mds-side .search { flex: none; padding: 16px; border-bottom: 1px solid var(--mds-n300); }
+.mds-side .items { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
+.mds-side .foot { flex: none; padding: 14px; border-top: 1px solid var(--mds-n300); }
+.mds-ws-item { padding: 12px; border-left: 2px solid transparent; margin-bottom: 2px; cursor: pointer; }
+.mds-ws-item:hover { background: var(--mds-n100); }
+.mds-ws-item.on { background: var(--mds-a100); border-left-color: var(--mds-a600); }
+.mds-ws-item .nm { font-family: var(--mds-font-head); font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mds-ws-item.on .nm { color: var(--mds-a900); }
+.mds-ws-item .st { font-size: 12px; color: var(--mds-n700); margin-top: 3px; }
+
+.mds-main { flex: 1; min-width: 480px; display: flex; flex-direction: column; overflow: hidden; }
+.mds-main .head { flex: none; padding: 18px 32px; border-bottom: 1px solid var(--mds-n300); display: flex; align-items: center; gap: 16px; }
+.mds-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 32px 40px; display: flex; flex-direction: column; gap: 26px; }
+.mds-msg { display: flex; }
+.mds-msg.me { justify-content: flex-end; }
+.mds-bubble { max-width: 660px; min-width: 0; padding: 16px 20px; font-size: 16px; line-height: 1.65; border: 1px solid var(--mds-n300); }
+.mds-msg.me .mds-bubble { background: var(--mds-a700); color: var(--mds-bg); border-color: var(--mds-a700); }
+.mds-who { font-family: var(--mds-font-head); font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--mds-a700); margin-bottom: 6px; }
+.mds-note {
+  font-size: 12.5px; color: var(--mds-n700); border-top: 1px solid var(--mds-n300);
+  padding-top: 9px; width: 100%; max-width: 660px; display: flex; gap: 10px; line-height: 1.5;
+}
+.mds-note b { color: var(--mds-a700); font-weight: 500; flex: none; }
+.mds-composer { flex: none; padding: 20px 32px; border-top: 1px solid var(--mds-n300); display: flex; gap: 14px; align-items: flex-end; }
+.mds-composer textarea { flex: 1; font-size: 16px; line-height: 1.55; resize: none; }
+
+.mds-panel { width: 344px; flex: none; border-left: 1px solid var(--mds-n300); overflow-y: auto; padding: 26px 24px; display: flex; flex-direction: column; gap: 30px; }
+.mds-panel.hide { display: none; }
+.mds-approval { border: 1px solid var(--mds-a700); padding: 18px; }
+.mds-step { display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--mds-n200); }
+.mds-box { flex: none; width: 15px; height: 15px; margin-top: 2px; border: 1.5px solid var(--mds-n500); display: flex; align-items: center; justify-content: center; }
+.mds-box.done { border-color: var(--mds-a600); background: var(--mds-a600); }
+.mds-box svg { display: none; }
+.mds-box.done svg { display: block; }
+.mds-kv { display: flex; justify-content: space-between; gap: 12px; font-size: 13.5px; }
+
+.mds-list-row { display: flex; align-items: center; gap: 20px; padding: 18px 14px; border-bottom: 1px solid var(--mds-n300); cursor: pointer; }
+.mds-list-row:hover { background: var(--mds-n100); }

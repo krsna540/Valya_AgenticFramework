@@ -25,7 +25,17 @@ langgraph-checkpoint-postgres==3.1.0
 # settings.database_url so both point at the same database).
 psycopg[binary]==3.2.3
 temporalio==1.30.0
-mlflow[genai]==3.10.*
+# Pinned to match the `mlflow` docker-compose service's image
+# (ghcr.io/mlflow/mlflow:v3.1.1) exactly, not just "a recent 3.x" — the
+# tracing client (app/agents/tracing.py) talks to that server's REST API
+# directly via mlflow.start_span/set_tracking_uri, and a client/server minor
+# version drift is exactly the kind of thing that breaks silently (a span
+# call that no-ops or 404s instead of raising) rather than at import time.
+mlflow[genai]==3.1.1
 qdrant-client==1.18.0
 redis==8.0.1
 mcp==1.28.1
+
+# Added 2026-08-08 for the PLATFORM_ARCHITECTURE.md build-out:
+minio==7.2.15          # content-addressed skill blob storage (app/core/minio_client.py)
+sse-starlette==2.1.3    # the split Stream Service, app/stream.py

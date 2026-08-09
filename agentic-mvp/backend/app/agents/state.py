@@ -474,6 +474,28 @@ def get_status(state: AgentState) -> RunStatus:
     return RunStatus(state.get("status") or RunStatus.RUNNING.value)
 
 
+def resolve_model_route(state: AgentState, role: str) -> str:
+    """The gateway route (or stub model name) the given role should call.
+
+    `scratchpad["model_routes"]` is a per-role dict set once in
+    `AgentRunRequest.to_state()` (app/agents/runtime.py) — see that
+    function's docstring for how it's populated: an agent with an explicit
+    `model_name` uses that one model for every role (today's behaviour,
+    unchanged); an agent left on "default" gets the role-split routes from
+    settings (planner/critic -> the strong-reasoning route, executor -> the
+    fast route) per PLATFORM_ARCHITECTURE.md's provider-split decision.
+
+    Falls back to the legacy flat `scratchpad["model_route"]` key, then to
+    "default", so a checkpoint written before this change (or a state built
+    by a test that only sets the old key) still resolves to something.
+    """
+    scratchpad = state.get("scratchpad") or {}
+    routes = scratchpad.get("model_routes")
+    if isinstance(routes, dict) and routes.get(role):
+        return str(routes[role])
+    return str(scratchpad.get("model_route") or "default")
+
+
 def get_plan(state: AgentState) -> Plan | None:
     raw = state.get("plan")
     if not raw:

@@ -111,5 +111,10 @@ class PromptRead(BaseModel):
     messages: list[PromptMessage]
     variables: list[PromptVariable]
     model_params: PromptModelParams
+    # migration 0016 — PLATFORM_ARCHITECTURE.md §7.2
+    access_class: str = "custom"
+    visibility: str = "private"
+    forked_from_id: uuid.UUID | None = None
+    owner_user_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime

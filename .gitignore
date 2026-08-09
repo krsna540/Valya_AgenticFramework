@@ -224,3 +224,5 @@ __marimo__/
 # a file that is already committed.
 .DS_Store
 **/.DS_Store
+
+agentic-mvp/data/*

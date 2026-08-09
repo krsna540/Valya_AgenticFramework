@@ -50,6 +50,7 @@ from app.agents.state import (
     get_critique,
     get_plan,
     get_step_results,
+    resolve_model_route,
 )
 from app.agents.tools import (
     DescribeOnlyToolInvoker,
@@ -228,7 +229,7 @@ class ExecutorAgent(BaseAgent):
                         ),
                         LLMMessage(role="user", content=prompt),
                     ],
-                    model=str(state.get("scratchpad", {}).get("model_route") or "default"),
+                    model=resolve_model_route(state, "executor"),
                     purpose="executor",
                     temperature=0.3,
                     max_tokens=1200,
@@ -333,7 +334,7 @@ class ExecutorAgent(BaseAgent):
                     ),
                 ),
             ],
-            model=str(state.get("scratchpad", {}).get("model_route") or "default"),
+            model=resolve_model_route(state, "executor"),
             purpose="executor",
             temperature=0.4,
             max_tokens=2000,

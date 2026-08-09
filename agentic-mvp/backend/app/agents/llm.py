@@ -43,6 +43,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.errors import ProviderConfigurationError, ProviderError
+from app.agents.tracing import set_span_attributes, set_span_outputs, traced_span
 from app.core.config import settings
 
 logger = logging.getLogger("agentic_mvp.agents.llm")
@@ -145,6 +146,56 @@ class LLMProvider(ABC):
         """Cheap liveness probe. Default: assume healthy — an adapter with a
         real endpoint should override."""
         return True
+
+
+async def _traced_complete(
+    provider_name: str,
+    request: LLMRequest,
+    impl: Any,
+) -> LLMResponse:
+    """Wrap one adapter's actual completion call in an MLflow LLM span.
+
+    Shared by all three adapters below rather than duplicated per class —
+    this is the one place "what does an LLM call look like in a trace"
+    gets decided, matching this codebase's rule of one definition per
+    cross-cutting concern (see lifecycle.py's `instrumented` docstring for
+    the same reasoning applied to node timing/retry/tracing). `impl` is a
+    zero-arg async callable so this helper never needs to know an adapter's
+    own dispatch logic (route -> provider, streaming-vs-not, etc).
+    """
+    last_user = next(
+        (m.content for m in reversed(request.messages) if m.role == "user"), ""
+    )
+    with traced_span(
+        f"llm.{provider_name}.complete",
+        span_type="LLM",
+        inputs={
+            "purpose": request.purpose,
+            "route": request.model,
+            "message_count": len(request.messages),
+            "last_user_message": last_user,
+        },
+        attributes={
+            "llm.provider": provider_name,
+            "llm.route": request.model,
+            "llm.purpose": request.purpose,
+            "llm.temperature": request.temperature,
+            "llm.max_tokens": request.max_tokens,
+        },
+    ) as span:
+        response: LLMResponse = await impl()
+        set_span_outputs(
+            span, {"text": response.text, "finish_reason": response.finish_reason or ""}
+        )
+        set_span_attributes(
+            span,
+            {
+                "llm.model": response.model,
+                "llm.input_tokens": response.input_tokens,
+                "llm.output_tokens": response.output_tokens,
+            },
+        )
+        return response
 
 
 # --- JSON coercion ----------------------------------------------------------
@@ -261,6 +312,9 @@ class GatewayLLMProvider(LLMProvider):
         return payload
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        return await _traced_complete(self.name, request, lambda: self._complete_impl(request))
+
+    async def _complete_impl(self, request: LLMRequest) -> LLMResponse:
         try:
             response = await self._client.post(
                 "/v1/chat/completions", json=self._payload(request, stream=False)
@@ -346,6 +400,211 @@ class GatewayLLMProvider(LLMProvider):
             return response.status_code < 400
         except httpx.HTTPError:
             return False
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+# --- Direct provider adapter (bypasses the gateway) -------------------------
+
+
+class DirectLLMProvider(LLMProvider):
+    """Calls Anthropic and OpenAI directly over httpx — no gateway, no SDK.
+
+    Why this exists alongside GatewayLLMProvider: MLflow's AI Gateway
+    (>=3.0, built into `mlflow server`) turned out to be UI/REST-managed —
+    LLM Connections and Endpoints are created by clicking through
+    `/#/settings` and `/#/gateway`, with no documented way to provision them
+    from a docker-compose init container (verified against MLflow's own
+    docs during this build; there is no `config.yaml` + `mlflow gateway
+    start` route-list anymore — that was the older, since-superseded
+    "Experimental" gateway). That makes the gateway unsuitable as the ONLY
+    path to a real LLM call in a `docker compose up` that has to work with
+    no manual clicking, which is what this session's "real LLM calls, split
+    by role" decision actually requires.
+
+    This adapter is the practical path for that: httpx straight to each
+    provider's native REST API, still no SDK dependency (same reasoning as
+    GatewayLLMProvider's docstring — httpx is already present). The mlflow
+    service stays in docker-compose for tracking/observability and as the
+    on-ramp to the gateway once someone completes its one-time UI setup
+    (see docker-compose.yml's mlflow-gateway comment) — this class is just
+    what actually answers chat/plan/critique calls in the meantime.
+
+    Role -> provider is resolved from the *route name* on the request
+    (`request.model`, set per-role by app.agents.state.resolve_model_route):
+    whichever of settings.agent_llm_route_planner/_executor/_critic equals
+    the incoming route name decides Anthropic vs OpenAI. An agent with an
+    explicit, non-route model_name (see default_model_routes()) is matched
+    by a simple substring heuristic ("claude"/"gpt"/"openai" in the name) —
+    good enough for the common case; an unrecognized name falls back to
+    whichever provider has a key configured, preferring Anthropic.
+    """
+
+    name = "direct"
+
+    def __init__(
+        self,
+        *,
+        anthropic_api_key: str = "",
+        openai_api_key: str = "",
+        anthropic_model: str = "claude-sonnet-5",
+        openai_model: str = "gpt-4o-mini",
+        timeout_s: float = 60.0,
+    ) -> None:
+        if not anthropic_api_key and not openai_api_key:
+            raise ProviderConfigurationError(
+                "AGENT_LLM_PROVIDER=direct requires at least one of "
+                "ANTHROPIC_API_KEY / OPENAI_API_KEY to be set"
+            )
+        self._anthropic_key = anthropic_api_key
+        self._openai_key = openai_api_key
+        self._anthropic_model = anthropic_model
+        self._openai_model = openai_model
+        self._client = httpx.AsyncClient(timeout=timeout_s)
+
+    def _provider_for_route(self, route: str) -> str:
+        if route == settings.agent_llm_route_executor:
+            return "openai"
+        if route in (settings.agent_llm_route_planner, settings.agent_llm_route_critic):
+            return "anthropic"
+        lowered = route.lower()
+        if "claude" in lowered or "anthropic" in lowered:
+            return "anthropic"
+        if "gpt" in lowered or "openai" in lowered:
+            return "openai"
+        return "anthropic" if self._anthropic_key else "openai"
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        return await _traced_complete(self.name, request, lambda: self._complete_impl(request))
+
+    async def _complete_impl(self, request: LLMRequest) -> LLMResponse:
+        provider = self._provider_for_route(request.model)
+        if provider == "anthropic" and self._anthropic_key:
+            return await self._complete_anthropic(request)
+        if provider == "openai" and self._openai_key:
+            return await self._complete_openai(request)
+        # Configured for one provider only and the route resolved to the
+        # other — fall back to whichever key is actually present rather
+        # than hard-failing a run over a routing preference.
+        if self._anthropic_key:
+            return await self._complete_anthropic(request)
+        return await self._complete_openai(request)
+
+    async def _complete_anthropic(self, request: LLMRequest) -> LLMResponse:
+        system_parts = [m.content for m in request.messages if m.role == "system"]
+        turns = [
+            {"role": m.role, "content": m.content}
+            for m in request.messages
+            if m.role in ("user", "assistant")
+        ]
+        payload: dict[str, Any] = {
+            "model": self._anthropic_model,
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+            "messages": turns or [{"role": "user", "content": ""}],
+        }
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
+        if request.stop:
+            payload["stop_sequences"] = request.stop
+        try:
+            response = await self._client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self._anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"Anthropic request failed: {exc}", model=self._anthropic_model, purpose=request.purpose) from exc
+
+        if response.status_code >= 400:
+            hard = 400 <= response.status_code < 500 and response.status_code not in (408, 429)
+            error_cls = ProviderConfigurationError if hard else ProviderError
+            raise error_cls(
+                f"Anthropic returned {response.status_code}", model=self._anthropic_model, purpose=request.purpose, body=response.text[:500]
+            )
+
+        try:
+            body = response.json()
+            blocks = body.get("content") or []
+            text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+            usage = body.get("usage") or {}
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ProviderError(f"Unexpected Anthropic response shape: {exc}", model=self._anthropic_model, body=response.text[:500]) from exc
+
+        return LLMResponse(
+            text=text,
+            model=body.get("model", self._anthropic_model),
+            input_tokens=int(usage.get("input_tokens", 0) or 0),
+            output_tokens=int(usage.get("output_tokens", 0) or 0),
+            finish_reason=body.get("stop_reason"),
+            raw=body,
+        )
+
+    async def _complete_openai(self, request: LLMRequest) -> LLMResponse:
+        payload: dict[str, Any] = {
+            "model": self._openai_model,
+            "messages": [m.model_dump() for m in request.messages],
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+        }
+        if request.stop:
+            payload["stop"] = request.stop
+        try:
+            response = await self._client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self._openai_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"OpenAI request failed: {exc}", model=self._openai_model, purpose=request.purpose) from exc
+
+        if response.status_code >= 400:
+            hard = 400 <= response.status_code < 500 and response.status_code not in (408, 429)
+            error_cls = ProviderConfigurationError if hard else ProviderError
+            raise error_cls(
+                f"OpenAI returned {response.status_code}", model=self._openai_model, purpose=request.purpose, body=response.text[:500]
+            )
+
+        try:
+            body = response.json()
+            choice = body["choices"][0]
+            text = choice["message"]["content"] or ""
+            usage = body.get("usage") or {}
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            raise ProviderError(f"Unexpected OpenAI response shape: {exc}", model=self._openai_model, body=response.text[:500]) from exc
+
+        return LLMResponse(
+            text=text,
+            model=body.get("model", self._openai_model),
+            input_tokens=int(usage.get("prompt_tokens", 0) or 0),
+            output_tokens=int(usage.get("completion_tokens", 0) or 0),
+            finish_reason=choice.get("finish_reason"),
+            raw=body,
+        )
+
+    async def stream(self, request: LLMRequest) -> AsyncIterator[str]:
+        # Chunked-complete rather than a native SSE parse for either
+        # upstream — see LLMProvider.stream's docstring: "adapters that
+        # can't stream natively chunk a complete() result", which is a
+        # deliberate scope cut here (both providers' native SSE shapes
+        # differ from GatewayLLMProvider's OpenAI-compatible one and from
+        # each other, and chat's token-by-token UX degrades gracefully to
+        # word-by-word rather than needing two more SSE parsers).
+        response = await self.complete(request)
+
+        async def _iter() -> AsyncIterator[str]:
+            for word in response.text.split(" "):
+                yield word + " "
+
+        return _iter()
+
+    async def healthcheck(self) -> bool:
+        return bool(self._anthropic_key or self._openai_key)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -489,6 +748,9 @@ class StubLLMProvider(LLMProvider):
         )
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        return await _traced_complete(self.name, request, lambda: self._complete_impl(request))
+
+    async def _complete_impl(self, request: LLMRequest) -> LLMResponse:
         if self._latency_s:
             await asyncio.sleep(self._latency_s)
         text = self._text(request)
@@ -510,6 +772,31 @@ class StubLLMProvider(LLMProvider):
                 yield word + " "
 
         return _iter()
+
+
+def default_model_routes(explicit_model_name: str | None) -> dict[str, str]:
+    """The `scratchpad["model_routes"]` dict `AgentRunRequest.to_state()`
+    seeds every run with (app/agents/runtime.py, read back by
+    `app.agents.state.resolve_model_route`).
+
+    An agent with an explicit model_name (anything other than the "default"
+    sentinel `AgentRunRequest.model_name` falls back to) keeps that single
+    model for every role — unchanged from before role-split routing existed.
+    An agent left on "default" gets the per-role routes from settings
+    instead, so Planner/Critic go to the strong-reasoning route and Executor
+    goes to the fast one without every agent needing to be reconfigured.
+    """
+    if explicit_model_name and explicit_model_name != "default":
+        return {
+            "planner": explicit_model_name,
+            "executor": explicit_model_name,
+            "critic": explicit_model_name,
+        }
+    return {
+        "planner": settings.agent_llm_route_planner,
+        "executor": settings.agent_llm_route_executor,
+        "critic": settings.agent_llm_route_critic,
+    }
 
 
 # --- Factory ----------------------------------------------------------------
@@ -536,6 +823,20 @@ def build_provider(kind: str | None = None) -> LLMProvider:
             settings.agent_llm_gateway_url,
             timeout_s=settings.agent_llm_timeout_s,
             api_key=settings.agent_llm_api_key or None,
+        )
+    if kind == "direct":
+        if not (settings.anthropic_api_key or settings.openai_api_key):
+            logger.warning(
+                "AGENT_LLM_PROVIDER=direct but neither ANTHROPIC_API_KEY nor "
+                "OPENAI_API_KEY is set; falling back to the deterministic stub provider"
+            )
+            return StubLLMProvider()
+        return DirectLLMProvider(
+            anthropic_api_key=settings.anthropic_api_key,
+            openai_api_key=settings.openai_api_key,
+            anthropic_model=settings.anthropic_model,
+            openai_model=settings.openai_model,
+            timeout_s=settings.agent_llm_timeout_s,
         )
     if kind == "stub":
         return StubLLMProvider()

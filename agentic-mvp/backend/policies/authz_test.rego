@@ -253,13 +253,40 @@ test_user_denied_write_project if {
 	}
 }
 
-test_user_denied_skills_hooks_plugins_datasources_personas if {
-	every rtype in ["skill", "hook", "plugin", "datasource", "persona", "tool", "user", "tenant"] {
+test_user_denied_skills_hooks_plugins_personas if {
+	every rtype in ["skill", "hook", "plugin", "persona", "tool", "user", "tenant"] {
 		not allow with input as {
 			"subject": {"id": "u3", "role": "user", "tenant_id": tenant_a},
 			"action": "read",
 			"resource": {"type": rtype, "tenant_id": tenant_a},
 		}
+	}
+}
+
+# Added for user-app.html's "Sources" screen — see authz.rego's
+# _user_readable_types comment: read-only, tenant-scoped datasource
+# visibility, same shape as the agent/project/prompt/run cases above.
+test_user_allowed_read_datasources if {
+	allow with input as {
+		"subject": {"id": "u3", "role": "user", "tenant_id": tenant_a},
+		"action": "list",
+		"resource": {"type": "datasource", "tenant_id": tenant_a},
+	}
+}
+
+test_user_denied_write_datasource if {
+	not allow with input as {
+		"subject": {"id": "u3", "role": "user", "tenant_id": tenant_a},
+		"action": "create",
+		"resource": {"type": "datasource", "tenant_id": tenant_a},
+	}
+}
+
+test_user_denied_cross_tenant_datasource_read if {
+	not allow with input as {
+		"subject": {"id": "u3", "role": "user", "tenant_id": tenant_a},
+		"action": "read",
+		"resource": {"type": "datasource", "tenant_id": tenant_b},
 	}
 }
 

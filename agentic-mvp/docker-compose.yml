@@ -2,10 +2,10 @@
 #
 #     docker compose up --build
 #
-# Ten containers, no profiles and no flags: everything needed to exercise the
-# app end to end starts by default. Three of them are one-shot setup/gate
-# containers that run and exit — `docker compose ps` showing them as `exited
-# (0)` is success, not failure.
+# Thirteen containers, no profiles and no flags: everything needed to
+# exercise the app end to end starts by default. Three of them are one-shot
+# setup/gate containers that run and exit — `docker compose ps` showing them
+# as `exited (0)` is success, not failure.
 #
 # Once up:
 #   Frontend            http://localhost:3000
@@ -13,6 +13,15 @@
 #   Temporal UI         http://localhost:8080
 #   OPA (decisions)     http://localhost:8181
 #   OCP (bundle build)  http://localhost:8282   (loopback only, see below)
+#   MinIO console        http://localhost:9001  (skill blob storage browser)
+#   MLflow / AI Gateway  http://localhost:5001  (tracking + gateway UI —
+#                         see the `mlflow` service's comment for what "AI
+#                         Gateway" actually requires beyond just starting)
+#
+# Real LLM calls (as opposed to the deterministic stub every run works
+# with by default) need nothing beyond .env: set AGENT_LLM_PROVIDER=direct
+# plus ANTHROPIC_API_KEY and/or OPENAI_API_KEY — see the `backend` service's
+# agent-runtime comment block below.
 #
 # Startup order is enforced with health gates rather than `sleep`, so the
 # stack is either up and correct or it fails loudly. The chain is:
@@ -24,8 +33,11 @@
 #               │                              v
 #               ├─────────────────────────>  opa ─started─> backend ─healthy─┬─> frontend
 #               │                                                            │
-#               └─> temporal ─healthy───────────────────────────────────────>├─> agent-worker
-#                        └─> temporal-ui
+#               ├─> temporal ─healthy───────────────────────────────────────>├─> agent-worker
+#               │        └─> temporal-ui                                     │
+#               ├─> redis ─started────────────────────────────────────────>──┤
+#               ├─> minio ─started────────────────────────────────────────>──┤
+#               └─> mlflow ─started (tracking/gateway; not on backend's critical path)
 #
 # Everything is pinned to a released tag whose amd64 *and* arm64 builds were
 # verified on Docker Hub — this runs natively on Apple Silicon, no emulation.
@@ -52,13 +64,126 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentic} -d ${POSTGRES_DB:-agentic}"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Redis 8 (AGPLv3 as of the 2025 relicensing — OSI-approved, see
+  # PLATFORM_ARCHITECTURE.md §3.7; 7.x is NOT this license, hence the major
+  # pin below). Three jobs, one instance: manifest-session cache
+  # (app/core/redis_client.py's cache_manifest_session), the run-event
+  # pub/sub fan-out PostgresEventSink publishes onto alongside its durable
+  # Postgres write, and a short-TTL pure-tool-result cache. Every caller
+  # wraps Redis calls in try/except-log-and-swallow (see redis_client.py's
+  # module docstring), so this being briefly down degrades those three
+  # features, not the app.
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Content-addressed object storage for skill package blobs (§3.8/§8.2) —
+  # see app/core/minio_client.py. Console on :9001 is the browsable
+  # object-browser UI; :9000 is the S3 API app/core/minio_client.py talks to.
+  minio:
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-valya}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-valya-dev-secret}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - ./data/minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # MLflow's Tracking Server, with the AI Gateway built in (>=3.0 — no
+  # separate gateway container, see PLATFORM_ARCHITECTURE.md's "check
+  # built-in capability before adding infra" note and [[project_mlflow_ai_gateway_llm_routing]]).
+  # Shares the app's Postgres as its backend store, same pattern as
+  # Temporal above.
+  #
+  # IMPORTANT — this is NOT what backend/agent-worker call for real LLM
+  # generation by default (see AGENT_LLM_PROVIDER=direct below): MLflow's
+  # AI Gateway turned out to be UI-managed (LLM Connections + Endpoints are
+  # created by clicking through http://localhost:5001/#/settings and
+  # /#/gateway; there is no documented way to provision them from a
+  # docker-compose init container as of the version pinned here). This
+  # service starts automatically for tracking/observability and as the
+  # on-ramp to the gateway UI if you want centralized provider governance
+  # later — completing that one-time UI setup (create an OpenAI connection
+  # + an `openai-fast` endpoint, an Anthropic connection + a `claude-strong`
+  # endpoint) and switching AGENT_LLM_PROVIDER=gateway is what activates it.
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.15.1-full
+    restart: unless-stopped
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -e
+        pip install --no-cache-dir psycopg2-binary >/dev/null 2>&1
+        # CREATE SCHEMA IF NOT EXISTS mlflow here, not (only) in db/init/01_init.sql —
+        # that script is a Postgres *initdb* hook and only runs against a
+        # completely empty data directory. On a volume that already exists
+        # from before this schema was added (or from any other prior boot),
+        # it silently never runs again, and mlflow's own CREATE TABLE then
+        # fails with "no schema has been selected to create in" — the
+        # search_path pointed at a schema that was never created. Doing it
+        # here makes this idempotent regardless of volume history.
+        python3 -c "
+        import psycopg2
+        conn = psycopg2.connect(host='db', port=5432, user='${POSTGRES_USER:-agentic}', password='${POSTGRES_PASSWORD:-agentic}', dbname='${POSTGRES_DB:-agentic}')
+        conn.autocommit = True
+        conn.cursor().execute('CREATE SCHEMA IF NOT EXISTS mlflow')
+        conn.close()
+        print('mlflow schema ensured')
+        "
+        # --allowed-hosts is REQUIRED here, not hardening. MLflow's FastAPI
+        # server validates the HTTP Host header as DNS-rebinding protection
+        # (CVE-2025-14279) and accepts only loopback by default. Every
+        # in-network caller reaches this service as http://mlflow:5000, so
+        # the Host header is "mlflow:5000" and MLflow answers 403 "Invalid
+        # Host header - possible DNS rebinding attack detected" — which
+        # surfaces in the backend as tracing silently disabling itself.
+        # Both bare and :port forms are listed because the check has been
+        # inconsistent about ports (mlflow/mlflow#22095). Loopback entries
+        # cover the browser hitting the UI on the host-published port.
+        mlflow server --host 0.0.0.0 --port 5000 \
+          --allowed-hosts "mlflow,mlflow:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*" \
+          --backend-store-uri postgresql://${POSTGRES_USER:-agentic}:${POSTGRES_PASSWORD:-agentic}@db:5432/${POSTGRES_DB:-agentic}?options=-csearch_path=mlflow \
+          --artifacts-destination /mlflow/artifacts
+    volumes:
+      - ./data/mlflow:/mlflow/artifacts
+    ports:
+      # Host side defaults to 5001, NOT 5000: on macOS the AirPlay Receiver
+      # (ControlCenter) binds 0.0.0.0:5000 by default, so `docker compose up`
+      # dies with "ports are not available ... address already in use" before
+      # anything else starts. Only the host-published port moves — everything
+      # in-network still talks to mlflow:5000 (MLFLOW_TRACKING_URI,
+      # AGENT_LLM_GATEWAY_URL), so no other service config changes.
+      # Override with MLFLOW_PORT if 5001 is taken too.
+      - "${MLFLOW_PORT:-5001}:5000"
+    depends_on:
+      db:
+        condition: service_healthy
 
   # ---------------------------------------------------------------------------
   # Authorization — OPA + OPA Control Plane
@@ -77,8 +202,8 @@ services:
     image: busybox:1.36
     command: ["chown", "-R", "1000:1000", "/bundles", "/data"]
     volumes:
-      - opa_bundles:/bundles
-      - opa_data:/data
+      - ./data/opa/bundles:/bundles
+      - ./data/opa/data:/data
 
   opa-control-plane:
     # Pinned, not `:edge`. `edge` tracks the tip of main and is rebuilt
@@ -111,8 +236,8 @@ services:
     volumes:
       - ./opa-control-plane/ocp.yml:/config/ocp.yml:ro
       - ./backend/policies:/policies:ro
-      - opa_bundles:/bundles
-      - opa_data:/data
+      - ./data/opa/bundles:/bundles
+      - ./data/opa/data:/data
     ports:
       # Loopback only. OCP's management API can rewrite the bundle that
       # authorizes every request in this app, and it runs unauthenticated here
@@ -154,7 +279,7 @@ services:
         done
         echo "Bundle published and readable after $${i}s."
     volumes:
-      - opa_bundles:/bundles:ro
+      - ./data/opa/bundles:/bundles:ro
     depends_on:
       opa-control-plane:
         condition: service_started
@@ -168,7 +293,7 @@ services:
     # unavailable. The bundle gate above is what makes the ordering correct.
     command: ["run", "--server", "--addr", "0.0.0.0:8181", "--watch", "/bundles/authz/bundle.tar.gz"]
     volumes:
-      - opa_bundles:/bundles:ro
+      - ./data/opa/bundles:/bundles:ro
     ports:
       - "${OPA_PORT:-8181}:8181"
     depends_on:
@@ -216,8 +341,14 @@ services:
       test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/7233' || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 30
-      start_period: 20s
+      # 40 retries * 5s + 45s start_period ~= 245s of headroom. Bumped up
+      # from 30/20s after a real cold-start on a resource-constrained
+      # machine took longer than that to finish schema setup + server init
+      # and got marked unhealthy while still starting cleanly (confirmed via
+      # `docker compose logs temporal` showing normal matching-engine
+      # startup, no errors) — a slow boot should not look like a failure.
+      retries: 40
+      start_period: 45s
     depends_on:
       db:
         condition: service_healthy
@@ -241,11 +372,13 @@ services:
   backend:
     build:
       context: ./backend
-    # Named explicitly so agent-worker can declare the same image and compose
-    # builds it once. Beyond the build time, this makes it impossible for the
-    # API and the worker to drift onto different builds of the same code —
-    # they share a database schema and a set of activity definitions, so a
-    # version skew between them is a genuinely confusing class of bug.
+    # Named explicitly so `agent-worker` can reuse this exact image without
+    # rebuilding it. This service is the ONLY one that builds this tag —
+    # see the note on agent-worker for why duplicating the build there breaks
+    # the Bake builder. Sharing one image also makes it impossible for the API
+    # and the worker to drift onto different builds of the same code: they
+    # share a database schema and a set of activity definitions, so a version
+    # skew between them is a confusing class of bug.
     image: agentic-mvp-backend:local
     restart: unless-stopped
     environment:
@@ -255,19 +388,52 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-agentic}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic}
       POSTGRES_DB: ${POSTGRES_DB:-agentic}
+      # RS256 by default (PLATFORM_ARCHITECTURE.md §14) — generate a pair with
+      # `python backend/scripts/generate_jwt_keypair.py` and put both PEM
+      # blocks (as single-line, \n-escaped strings) in your untracked .env.
+      # Falls back to the HS256 secret below when both keys are blank, so a
+      # bare `docker compose up` with no .env still boots — see security.py.
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-RS256}
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-prod}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
       CORS_ORIGINS: '["http://localhost:${FRONTEND_PORT:-3000}","http://localhost:5173"]'
       OPA_URL: http://opa:8181
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-valya}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-valya-dev-secret}
+      MINIO_SECURE: "false"
+      MINIO_SKILLS_BUCKET: ${MINIO_SKILLS_BUCKET:-skills}
       # --- agent runtime (app/agents/) ---
-      # Defaults to the offline stub provider so a plain `docker compose up`
-      # runs the Planner->Executor->Critic graph end to end with no
-      # credentials. Set AGENT_LLM_PROVIDER=gateway plus AGENT_LLM_GATEWAY_URL
-      # to route generation through the MLflow AI Gateway instead.
+      # "stub"    -> deterministic offline provider, no credentials needed
+      #              (the default, so a bare `docker compose up` still runs
+      #              the full Planner->Executor->Critic graph end to end).
+      # "direct"  -> real calls straight to Anthropic/OpenAI over httpx, no
+      #              gateway involved — set this plus the ANTHROPIC_/OPENAI_
+      #              keys below. See app/agents/llm.py::DirectLLMProvider's
+      #              docstring for why this is the practical "real LLM"
+      #              path rather than "gateway".
+      # "gateway" -> MLflow AI Gateway — requires completing its one-time
+      #              UI setup at http://localhost:5001/#/settings first
+      #              (see the `mlflow` service's comment above); until then
+      #              this falls back to the stub with a logged warning.
       AGENT_LLM_PROVIDER: ${AGENT_LLM_PROVIDER:-stub}
-      AGENT_LLM_GATEWAY_URL: ${AGENT_LLM_GATEWAY_URL:-}
+      AGENT_LLM_GATEWAY_URL: ${AGENT_LLM_GATEWAY_URL:-http://mlflow:5000/gateway/mlflow}
       AGENT_LLM_API_KEY: ${AGENT_LLM_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      # Role-split routing (Planner/Critic = strong reasoning, Executor =
+      # fast/cheap) — see app/agents/state.py::resolve_model_route. These
+      # names are what DirectLLMProvider matches on to pick Anthropic vs
+      # OpenAI, and what a gateway Endpoint would need to be named if you
+      # complete the MLflow UI setup instead.
+      AGENT_LLM_ROUTE_PLANNER: ${AGENT_LLM_ROUTE_PLANNER:-claude-strong}
+      AGENT_LLM_ROUTE_EXECUTOR: ${AGENT_LLM_ROUTE_EXECUTOR:-openai-fast}
+      AGENT_LLM_ROUTE_CRITIC: ${AGENT_LLM_ROUTE_CRITIC:-claude-strong}
       # Postgres checkpointing makes runs resumable across a restart. Degrades
       # to in-memory with a warning if it can't be provisioned, so this being
       # on never blocks startup — see app/agents/checkpointer.py.
@@ -280,15 +446,30 @@ services:
       TEMPORAL_HOST: temporal:7233
       TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
       TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-valya-agents}
+      # MLflow tracing (app/agents/tracing.py) — every agent run/node/LLM
+      # call logged as an OTel-based trace to the same `mlflow` service
+      # already in this file. No `depends_on` on `mlflow` deliberately:
+      # tracing is best-effort (see that module's fault-isolation
+      # contract), and coupling backend's startup ordering to mlflow's own
+      # boot would reintroduce the slow-cold-start issue already worked
+      # around for `temporal` — a missing/slow mlflow should degrade
+      # tracing, not delay or fail the API container.
+      MLFLOW_TRACING_ENABLED: ${MLFLOW_TRACING_ENABLED:-true}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME:-agentic-mvp-agent-runs}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
-      - uploads_data:/app/data/uploads
-      - skill_packages_data:/app/data/skill_packages
+      - ./data/uploads:/app/data/uploads
+      - ./data/skill-packages:/app/data/skill_packages
     depends_on:
       db:
         condition: service_healthy
       opa:
+        condition: service_started
+      redis:
+        condition: service_started
+      minio:
         condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -301,11 +482,19 @@ services:
   # minutes, which would otherwise compete with request handling on the same
   # event loop and tie worker capacity to web capacity.
   agent-worker:
-    build:
-      context: ./backend
-    # Same image as `backend` (see the note there) — built once, and the two
-    # can never run different builds of the same code.
+    # Runs the *same* image as `backend` (see the note there) so the API and
+    # the worker can never run different builds of the same code.
+    #
+    # Deliberately has NO `build:` section. If both services declared the same
+    # build context AND the same `image:` tag, Compose's Bake builder would
+    # treat them as two independent targets exporting to one tag and fail with
+    # `image "agentic-mvp-backend:local": already exists`. Only `backend`
+    # builds the tag; `depends_on: backend` below guarantees it exists first.
     image: agentic-mvp-backend:local
+    # Never go to a registry for this tag — it only ever exists locally, built
+    # by `backend`. Without this, a missing image turns into a Docker Hub pull
+    # for a nonexistent repo instead of a clear error.
+    pull_policy: never
     restart: unless-stopped
     # Overrides entrypoint.sh, which runs migrations then uvicorn. Deliberate:
     # the API owns migrations, the worker only polls the task queue.
@@ -317,22 +506,49 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-agentic}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentic}
       POSTGRES_DB: ${POSTGRES_DB:-agentic}
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-valya}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-valya-dev-secret}
+      MINIO_SECURE: "false"
+      MINIO_SKILLS_BUCKET: ${MINIO_SKILLS_BUCKET:-skills}
+      # Same LLM configuration as `backend` — see that service's comments.
+      # The worker runs the identical Planner->Executor->Critic graph off
+      # the Temporal task queue, so it needs the same provider/route setup
+      # to answer durable (non-chat) runs the same way interactive chat does.
       AGENT_LLM_PROVIDER: ${AGENT_LLM_PROVIDER:-stub}
-      AGENT_LLM_GATEWAY_URL: ${AGENT_LLM_GATEWAY_URL:-}
+      AGENT_LLM_GATEWAY_URL: ${AGENT_LLM_GATEWAY_URL:-http://mlflow:5000/gateway/mlflow}
       AGENT_LLM_API_KEY: ${AGENT_LLM_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      AGENT_LLM_ROUTE_PLANNER: ${AGENT_LLM_ROUTE_PLANNER:-claude-strong}
+      AGENT_LLM_ROUTE_EXECUTOR: ${AGENT_LLM_ROUTE_EXECUTOR:-openai-fast}
+      AGENT_LLM_ROUTE_CRITIC: ${AGENT_LLM_ROUTE_CRITIC:-claude-strong}
       AGENT_CHECKPOINTER: ${AGENT_CHECKPOINTER:-postgres}
       TEMPORAL_ENABLED: "true"
       TEMPORAL_HOST: temporal:7233
       TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
       TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-valya-agents}
+      # Same tracing config as `backend` — see that service's comment. The
+      # worker runs the identical graph off the Temporal task queue, so
+      # durable runs need to trace the same way interactive chat runs do.
+      MLFLOW_TRACING_ENABLED: ${MLFLOW_TRACING_ENABLED:-true}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME:-agentic-mvp-agent-runs}
     volumes:
-      - uploads_data:/app/data/uploads
-      - skill_packages_data:/app/data/skill_packages
+      - ./data/uploads:/app/data/uploads
+      - ./data/skill-packages:/app/data/skill_packages
     depends_on:
       db:
         condition: service_healthy
       temporal:
         condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
       # The API owns migrations (entrypoint.sh runs `alembic upgrade head`),
       # so the worker waits for it rather than racing it on a cold start —
       # two processes attempting the same migration is the classic way to
@@ -354,15 +570,3 @@ services:
       backend:
         condition: service_healthy
 
-volumes:
-  db_data:
-  uploads_data:
-  skill_packages_data:
-  # Bundles published by opa-control-plane and read by opa.
-  opa_bundles:
-  # opa-control-plane's own working directory (--data-dir). Separate from
-  # opa_bundles because only OCP touches it, and because wiping working state
-  # to force a clean rebuild should not also delete the artifact opa is
-  # currently serving: removing agentic-mvp_opa_data leaves authorization up
-  # until the rebuild lands.
-  opa_data:

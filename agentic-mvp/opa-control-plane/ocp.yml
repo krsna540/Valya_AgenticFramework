@@ -2,13 +2,26 @@
 # bundle and publishes it to the shared opa_bundles volume, which the `opa`
 # service watches and serves. See docs/AUTHORIZATION.md §6.
 #
-# No `database:` block: OCP defaults to an in-memory SQLite store for its own
-# state (source/bundle definitions), which is fine here since this repo's
-# config.d file is itself the source of truth and gets reloaded on restart.
+# No `database:` block, so OCP uses its default SQLite store for its own state
+# (source/bundle definitions, build bookkeeping).
+#
+# That store is NOT in-memory in this deployment: docker-compose.yml passes
+# `--data-dir=/data`, which is bind-mounted to ./data/opa/data, so sqlite.db
+# survives container recreation. Consequence worth knowing when debugging:
+# recreating the opa-control-plane container does NOT by itself guarantee a
+# fresh bundle build, because OCP may consider the bundle already built from
+# the persisted record. If you change this file and the expected artifact does
+# not appear under ./data/opa/bundles/, clear ./data/opa/data/ and
+# ./data/opa/bundles/ and recreate — see docs/AUTHORIZATION.md §6.
 bundles:
   authz:
     object_storage:
       filesystem:
+        # NOTE: no space before "gz". This path must match byte-for-byte the
+        # path that `opa-bundle-wait` gzip-tests and that `opa --watch` serves
+        # in docker-compose.yml. A typo here does not fail loudly: OCP happily
+        # publishes to whatever name it is given, and the failure surfaces as
+        # opa-bundle-wait timing out on a file that "obviously exists".
         path: /bundles/authz/bundle.tar.gz
     requirements:
       - source: authz

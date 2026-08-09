@@ -46,6 +46,7 @@ from app.agents.state import (
     Verdict,
     get_plan,
     latest_step_results,
+    resolve_model_route,
 )
 
 logger = logging.getLogger("agentic_mvp.agents.critic")
@@ -111,7 +112,7 @@ class CriticAgent(BaseAgent):
                             ),
                         ),
                     ],
-                    model=str(state.get("scratchpad", {}).get("model_route") or "default"),
+                    model=resolve_model_route(state, "critic"),
                     purpose="critic",
                     temperature=0.0,  # a judgement should be reproducible
                     max_tokens=800,

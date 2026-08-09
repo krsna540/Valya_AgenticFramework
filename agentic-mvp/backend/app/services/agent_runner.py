@@ -48,6 +48,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from app.agents.durable import get_runner
+from app.agents.event_persistence import PostgresEventSink
 from app.agents.lifecycle import (
     CompositeEventSink,
     EventSink,
@@ -202,7 +203,13 @@ async def stream_agent_response(
 
     gate = _ToolGateSink(hook_manager, hook_context)
     persist = agent_run_store.PersistingEventSink(run_id)
-    sink = CompositeEventSink(gate, persist)
+    # Additive, 2026-08-08: also project every event onto the episodic
+    # `events` table (PLATFORM_ARCHITECTURE.md §10/§11.3) and publish it to
+    # Redis for any external subscriber (app/stream.py) — see
+    # app/agents/event_persistence.py's module docstring for why this is a
+    # parallel sink rather than a change to PersistingEventSink itself.
+    episodic = PostgresEventSink(run_id, tenant_id=agent.tenant_id, project_id=None)
+    sink = CompositeEventSink(gate, persist, episodic)
 
     agent_run_store.create_run(
         run_id=run_id,

@@ -9,6 +9,7 @@ from app.core.tenant_scope import apply_shared_or_own_tenant, is_visible
 from app.models.plugin import Plugin
 from app.models.user import User
 from app.schemas.plugin import PluginCreate, PluginRead, PluginUpdate
+from app.services.registry_access import fork_row
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
 
@@ -78,3 +79,17 @@ def delete_plugin(plugin_id: uuid.UUID, db: Session = Depends(get_db), current_a
     db.delete(plugin)
     db.commit()
     return None
+
+
+@router.post("/{plugin_id}/fork", response_model=PluginRead, status_code=status.HTTP_201_CREATED)
+def fork_plugin(plugin_id: uuid.UUID, db: Session = Depends(get_db), current_admin: User = Depends(authorize("plugin", "create"))) -> PluginRead:
+    """PLATFORM_ARCHITECTURE.md §7.5 fork-and-override — see prompts.py's
+    fork_prompt for the full rationale, identical here."""
+    source = _visible_or_404(db, current_admin, plugin_id)
+    if current_admin.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Super admin has no tenant of their own to fork into")
+    forked = fork_row(source, new_tenant_id=current_admin.tenant_id, owner_user_id=current_admin.id, model_cls=Plugin)
+    db.add(forked)
+    db.commit()
+    db.refresh(forked)
+    return PluginRead.model_validate(forked)

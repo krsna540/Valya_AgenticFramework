@@ -81,6 +81,10 @@ class PluginRead(BaseModel):
     description: str | None
     is_active: bool
     config: dict
+    access_class: str = "custom"
+    visibility: str = "private"
+    forked_from_id: uuid.UUID | None = None
+    owner_user_id: uuid.UUID | None = None
     version: str
     status: str
     exports_skills: list[str]

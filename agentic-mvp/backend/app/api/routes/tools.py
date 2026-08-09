@@ -9,6 +9,7 @@ from app.core.tenant_scope import apply_shared_or_own_tenant, is_visible
 from app.models.tool import Tool
 from app.models.user import User
 from app.schemas.tool import ToolCreate, ToolRead, ToolUpdate
+from app.services.registry_access import fork_row
 
 router = APIRouter(prefix="/tools", tags=["tools"])
 
@@ -83,3 +84,17 @@ def delete_tool(tool_id: uuid.UUID, db: Session = Depends(get_db), current_admin
     db.delete(tool)
     db.commit()
     return None
+
+
+@router.post("/{tool_id}/fork", response_model=ToolRead, status_code=status.HTTP_201_CREATED)
+def fork_tool(tool_id: uuid.UUID, db: Session = Depends(get_db), current_admin: User = Depends(authorize("tool", "create"))) -> ToolRead:
+    """PLATFORM_ARCHITECTURE.md §7.5 fork-and-override — see prompts.py's
+    fork_prompt for the full rationale, identical here."""
+    source = _visible_or_404(db, current_admin, tool_id)
+    if current_admin.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Super admin has no tenant of their own to fork into")
+    forked = fork_row(source, new_tenant_id=current_admin.tenant_id, owner_user_id=current_admin.id, model_cls=Tool)
+    db.add(forked)
+    db.commit()
+    db.refresh(forked)
+    return ToolRead.model_validate(forked)

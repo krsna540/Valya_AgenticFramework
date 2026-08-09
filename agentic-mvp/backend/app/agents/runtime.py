@@ -30,7 +30,9 @@ The existing chat route already eager-loads for exactly this reason.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import sys
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -48,7 +50,7 @@ from app.agents.lifecycle import (
     NullEventSink,
     QueueEventSink,
 )
-from app.agents.llm import LLMProvider, get_llm_provider
+from app.agents.llm import LLMProvider, default_model_routes, get_llm_provider
 from app.agents.state import (
     AgentState,
     RunPhase,
@@ -58,6 +60,7 @@ from app.agents.state import (
     new_state,
 )
 from app.agents.tools import SkillSpec, ToolSpec, build_tool_invoker
+from app.agents.tracing import set_span_attributes, set_span_outputs, traced_span, update_current_trace
 
 logger = logging.getLogger("agentic_mvp.agents.runtime")
 
@@ -173,10 +176,17 @@ class AgentRunRequest(BaseModel):
             available_skills=self.skills,
             context_documents=self.context_documents,
         )
-        # The model route travels in the scratchpad rather than as a channel
-        # of its own: it is an execution detail every node reads and none
-        # writes, and adding a channel per such detail bloats every checkpoint.
-        state["scratchpad"] = {"model_route": self.model_name}
+        # The model route(s) travel in the scratchpad rather than as a
+        # channel of their own: it is an execution detail every node reads
+        # and none writes, and adding a channel per such detail bloats every
+        # checkpoint. `model_route` (singular) is kept alongside the new
+        # per-role `model_routes` dict for backward compatibility with any
+        # checkpoint or test that only knows the old flat key — see
+        # app.agents.state.resolve_model_route for the read side.
+        state["scratchpad"] = {
+            "model_route": self.model_name,
+            "model_routes": default_model_routes(self.model_name),
+        }
         return state
 
 
@@ -223,6 +233,36 @@ class AgentRunResult(BaseModel):
             transcript=list(state.get("transcript") or []),
             state=dict(state),
         )
+
+
+def _run_span_inputs(request: AgentRunRequest) -> dict[str, Any]:
+    return {"objective": request.objective, "language": request.language}
+
+
+def _run_span_attributes(request: AgentRunRequest) -> dict[str, Any]:
+    return {
+        "run.run_id": request.run_id,
+        "run.agent_id": request.agent_id,
+        "run.agent_name": request.agent_name,
+        "run.tenant_id": request.tenant_id or "",
+        "run.project_id": request.project_id or "",
+        "run.conversation_id": request.conversation_id or "",
+        "run.model_name": request.model_name,
+    }
+
+
+def _run_trace_tags(request: AgentRunRequest) -> dict[str, str]:
+    """Tags attached to the *trace* (not just the root span) so a run is
+    findable in the MLflow UI's trace list/search by these fields directly,
+    without opening the trace to inspect span attributes."""
+    tags = {
+        "run_id": request.run_id,
+        "agent_id": request.agent_id,
+        "agent_name": request.agent_name,
+    }
+    if request.tenant_id:
+        tags["tenant_id"] = request.tenant_id
+    return tags
 
 
 class AgentRuntime:
@@ -282,21 +322,43 @@ class AgentRuntime:
         started = time.monotonic()
         sink = sink or NullEventSink()
         graph = await self._compiled(request)
-        try:
-            final_state = await asyncio.wait_for(
-                graph.ainvoke(request.to_state(), config=self._graph_config(request, sink)),
-                timeout=request.config.run_timeout_s,
+        with traced_span(
+            f"agent_run.{request.agent_name}",
+            span_type="AGENT",
+            inputs=_run_span_inputs(request),
+            attributes=_run_span_attributes(request),
+        ) as span:
+            update_current_trace(tags=_run_trace_tags(request))
+            try:
+                final_state = await asyncio.wait_for(
+                    graph.ainvoke(request.to_state(), config=self._graph_config(request, sink)),
+                    timeout=request.config.run_timeout_s,
+                )
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.warning(
+                    "Run %s exceeded its %ss budget",
+                    request.run_id,
+                    request.config.run_timeout_s,
+                )
+                result = self._timeout_result(request, started)
+                set_span_attributes(span, {"run.status": result.status.value, "run.timed_out": True})
+                return result
+            result = AgentRunResult.from_state(
+                final_state, duration_ms=int((time.monotonic() - started) * 1000)
             )
-        except (asyncio.TimeoutError, TimeoutError):
-            logger.warning(
-                "Run %s exceeded its %ss budget",
-                request.run_id,
-                request.config.run_timeout_s,
+            set_span_outputs(
+                span, {"status": result.status.value, "final_answer": result.final_answer}
             )
-            return self._timeout_result(request, started)
-        return AgentRunResult.from_state(
-            final_state, duration_ms=int((time.monotonic() - started) * 1000)
-        )
+            set_span_attributes(
+                span,
+                {
+                    "run.status": result.status.value,
+                    "run.revisions": result.revisions,
+                    "run.replans": result.replans,
+                    "run.needs_human_review": result.needs_human_review,
+                },
+            )
+            return result
 
     # --- streaming ----------------------------------------------------------
 
@@ -321,85 +383,127 @@ class AgentRuntime:
         graph = await self._compiled(request)
         result_holder: dict[str, Any] = {}
 
-        async def _drive() -> None:
-            try:
-                result_holder["state"] = await graph.ainvoke(
-                    request.to_state(), config=self._graph_config(request, sink)
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 — becomes a terminal event
-                logger.exception("Agent run %s failed", request.run_id)
-                result_holder["error"] = exc
-            finally:
-                await queue.put(_DONE)
-
-        task = asyncio.create_task(_drive())
+        # Root span for the whole run, opened manually (rather than via a
+        # `with` block) because the work it covers spans a background task
+        # (`_drive`, below) plus this generator's own yields — no single
+        # lexical block covers both. `asyncio.create_task` snapshots the
+        # current contextvars at creation time, so opening the span before
+        # `_drive` is scheduled is what makes every AGENT/LLM span raised
+        # inside `graph.ainvoke` nest under this one. Closed unconditionally
+        # in the `finally` below — including on a client disconnect
+        # (GeneratorExit), which is why this can't just be a `with` around
+        # the function body.
+        span_cm = traced_span(
+            f"agent_run.{request.agent_name}",
+            span_type="AGENT",
+            inputs=_run_span_inputs(request),
+            attributes=_run_span_attributes(request),
+        )
+        span = span_cm.__enter__()
+        update_current_trace(tags=_run_trace_tags(request))
 
         try:
-            while True:
-                item = await queue.get()
-                if item is _DONE:
-                    break
-                if isinstance(item, LifecycleEvent):
-                    yield item
+            async def _drive() -> None:
+                try:
+                    result_holder["state"] = await graph.ainvoke(
+                        request.to_state(), config=self._graph_config(request, sink)
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — becomes a terminal event
+                    logger.exception("Agent run %s failed", request.run_id)
+                    result_holder["error"] = exc
+                finally:
+                    await queue.put(_DONE)
+
+            task = asyncio.create_task(_drive())
+
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is _DONE:
+                        break
+                    if isinstance(item, LifecycleEvent):
+                        yield item
+            finally:
+                # Covers the generator being closed early (client disconnect):
+                # without this the graph task would keep burning tokens for a
+                # response nobody is reading.
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+            error = result_holder.get("error")
+            if error is not None:
+                set_span_attributes(
+                    span,
+                    {
+                        "run.status": RunStatus.FAILED.value,
+                        "run.error_type": type(error).__name__,
+                    },
+                )
+                yield LifecycleEvent(
+                    type=EventType.RUN_END,
+                    run_id=request.run_id,
+                    agent_id=request.agent_id,
+                    agent_name=request.agent_name,
+                    trace_id=request.trace_id,
+                    phase=RunPhase.DONE.value,
+                    data={
+                        "status": RunStatus.FAILED.value,
+                        "error": {"error_type": type(error).__name__, "message": str(error)},
+                        "final_answer": (
+                            "This request could not be completed because the agent runtime "
+                            "encountered an unexpected error."
+                        ),
+                        "duration_ms": int((time.monotonic() - started) * 1000),
+                    },
+                )
+                return
+
+            # The graph's own finalize_node already emitted RUN_END with the
+            # status; this final event carries the assembled result so the
+            # caller doesn't have to reconstruct it from the state dict.
+            state = result_holder.get("state")
+            if state is not None:
+                result = AgentRunResult.from_state(
+                    state, duration_ms=int((time.monotonic() - started) * 1000)
+                )
+                self._last_result = result
+                set_span_outputs(
+                    span, {"status": result.status.value, "final_answer": result.final_answer}
+                )
+                set_span_attributes(
+                    span,
+                    {
+                        "run.status": result.status.value,
+                        "run.revisions": result.revisions,
+                        "run.replans": result.replans,
+                        "run.needs_human_review": result.needs_human_review,
+                    },
+                )
+                yield LifecycleEvent(
+                    type=EventType.RUN_END,
+                    run_id=request.run_id,
+                    agent_id=request.agent_id,
+                    agent_name=request.agent_name,
+                    trace_id=request.trace_id,
+                    phase=result.phase.value,
+                    revision=result.revisions,
+                    data={
+                        "status": result.status.value,
+                        "final_answer": result.final_answer,
+                        "critic_verdict": result.critic_verdict,
+                        "critic_score": result.critic_score,
+                        "needs_human_review": result.needs_human_review,
+                        "token_usage": result.token_usage,
+                        "duration_ms": result.duration_ms,
+                        "final": True,
+                    },
+                )
         finally:
-            # Covers the generator being closed early (client disconnect):
-            # without this the graph task would keep burning tokens for a
-            # response nobody is reading.
-            if not task.done():
-                task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-        error = result_holder.get("error")
-        if error is not None:
-            yield LifecycleEvent(
-                type=EventType.RUN_END,
-                run_id=request.run_id,
-                agent_id=request.agent_id,
-                agent_name=request.agent_name,
-                trace_id=request.trace_id,
-                phase=RunPhase.DONE.value,
-                data={
-                    "status": RunStatus.FAILED.value,
-                    "error": {"error_type": type(error).__name__, "message": str(error)},
-                    "final_answer": (
-                        "This request could not be completed because the agent runtime "
-                        "encountered an unexpected error."
-                    ),
-                    "duration_ms": int((time.monotonic() - started) * 1000),
-                },
-            )
-            return
-
-        # The graph's own finalize_node already emitted RUN_END with the
-        # status; this final event carries the assembled result so the caller
-        # doesn't have to reconstruct it from the state dict.
-        state = result_holder.get("state")
-        if state is not None:
-            result = AgentRunResult.from_state(
-                state, duration_ms=int((time.monotonic() - started) * 1000)
-            )
-            self._last_result = result
-            yield LifecycleEvent(
-                type=EventType.RUN_END,
-                run_id=request.run_id,
-                agent_id=request.agent_id,
-                agent_name=request.agent_name,
-                trace_id=request.trace_id,
-                phase=result.phase.value,
-                revision=result.revisions,
-                data={
-                    "status": result.status.value,
-                    "final_answer": result.final_answer,
-                    "critic_verdict": result.critic_verdict,
-                    "critic_score": result.critic_score,
-                    "needs_human_review": result.needs_human_review,
-                    "token_usage": result.token_usage,
-                    "duration_ms": result.duration_ms,
-                    "final": True,
-                },
-            )
+            with contextlib.suppress(Exception):
+                span_cm.__exit__(*sys.exc_info())
 
     @property
     def last_result(self) -> AgentRunResult | None:

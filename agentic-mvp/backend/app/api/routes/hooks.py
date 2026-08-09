@@ -10,6 +10,7 @@ from app.models.hook import Hook
 from app.models.user import User
 from app.schemas.registry import HookCreate, HookHandlerInfo, HookRead, HookUpdate, LifecycleEventInfo
 from app.services.hooks import BUILTIN_HOOKS, STAGES, WIRED_STAGES, list_builtin_handlers
+from app.services.registry_access import fork_row
 
 
 def _visible_or_404(db: Session, current_user: User, hook_id: uuid.UUID) -> Hook:
@@ -134,3 +135,20 @@ def delete_hook(hook_id: uuid.UUID, db: Session = Depends(get_db), current_admin
     db.delete(hook)
     db.commit()
     return None
+
+
+@router.post("/{hook_id}/fork", response_model=HookRead, status_code=status.HTTP_201_CREATED)
+def fork_hook(hook_id: uuid.UUID, db: Session = Depends(get_db), current_admin: User = Depends(authorize("hook", "create"))) -> Hook:
+    """PLATFORM_ARCHITECTURE.md §7.5 fork-and-override — see
+    prompts.py::fork_prompt for the full rationale. Hook gets this via
+    RegistryAccessMixin directly (app/models/hook.py) rather than through
+    TenantScopedMixin, but fork_row() only needs the mixin's columns to
+    exist, not which class supplied them."""
+    source = _visible_or_404(db, current_admin, hook_id)
+    if current_admin.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Super admin has no tenant of their own to fork into")
+    forked = fork_row(source, new_tenant_id=current_admin.tenant_id, owner_user_id=current_admin.id, model_cls=Hook)
+    db.add(forked)
+    db.commit()
+    db.refresh(forked)
+    return forked
