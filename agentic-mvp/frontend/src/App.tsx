@@ -12,6 +12,7 @@ import SkillsPage from "./pages/SkillsPage";
 import ToolsPage from "./pages/ToolsPage";
 import PluginsPage from "./pages/PluginsPage";
 import HooksPage from "./pages/HooksPage";
+import PlaybooksPage from "./pages/PlaybooksPage";
 import PromptsPage from "./pages/PromptsPage";
 import ChatPage from "./pages/ChatPage";
 import PersonasPage from "./pages/PersonasPage";
@@ -104,6 +105,7 @@ export default function App() {
               <Route path="datasources" element={<DatasourcesPage />} />
               <Route path="personas" element={<PersonasPage />} />
               <Route path="agents" element={<AgentsPage />} />
+              <Route path="playbooks" element={<PlaybooksPage />} />
             </Route>
 
             {/* Super Admin flow: legacy dashboard, kept reachable but no
@@ -145,6 +147,24 @@ export default function App() {
               <Route path="sources" element={<Admin2SourcesPage />} />
               <Route path="abilities" element={<Admin2AbilitiesPage />} />
               <Route path="rules" element={<Admin2RulesPage />} />
+
+              {/* Registry authoring — the full create/edit/delete pages.
+                  These are the same components mounted under the legacy
+                  /app/admin layout below; they are mounted here too because
+                  Admin's default landing flow is this shell, and the
+                  "Abilities" screen above is read-only by design (it is the
+                  mockup's flat roll-up). Mounting rather than duplicating
+                  keeps a single implementation of each form — both paths
+                  render the identical component. See AdminShell's
+                  BUILD_NAV. */}
+              <Route path="agents" element={<AgentsPage />} />
+              <Route path="skills" element={<SkillsPage />} />
+              <Route path="tools" element={<ToolsPage />} />
+              <Route path="plugins" element={<PluginsPage />} />
+              <Route path="hooks" element={<HooksPage />} />
+              <Route path="prompts" element={<PromptsPage />} />
+              <Route path="personas" element={<PersonasPage />} />
+              <Route path="playbooks" element={<PlaybooksPage />} />
             </Route>
 
             {/* User flow: user-app.html shell — the default landing route

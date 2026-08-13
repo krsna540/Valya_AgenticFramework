@@ -38,10 +38,14 @@ def list_playbooks(db: Session = Depends(get_db), current_user: User = Depends(a
 
 @router.post("", response_model=PlaybookRead, status_code=status.HTTP_201_CREATED)
 def create_playbook(payload: PlaybookCreate, db: Session = Depends(get_db), current_admin: User = Depends(authorize("playbook", "create"))) -> PlaybookRead:
+    # model_dump() already recurses into the nested component models
+    # (PlaybookStep/PlaybookInput/PlaybookExample/...), so every JSON column
+    # receives plain dicts. The previous version excluded two of them and
+    # re-dumped those by hand, which did the same thing for two fields and
+    # would silently have left the seven added in migration 0019 as Pydantic
+    # objects had the pattern been copied forward.
     playbook = Playbook(
-        **payload.model_dump(exclude={"canonical_steps", "known_assumptions"}),
-        canonical_steps=[s.model_dump() for s in payload.canonical_steps],
-        known_assumptions=[a.model_dump() for a in payload.known_assumptions],
+        **payload.model_dump(),
         tenant_id=current_admin.tenant_id,
         owner_user_id=current_admin.id,
     )
@@ -66,12 +70,10 @@ def update_playbook(
     playbook = _visible_or_404(db, current_admin, playbook_id)
     if playbook.tenant_id is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Platform-shared items cannot be edited")
-    data = payload.model_dump(exclude_unset=True)
-    if "canonical_steps" in data and data["canonical_steps"] is not None:
-        data["canonical_steps"] = [s if isinstance(s, dict) else s for s in data["canonical_steps"]]
-    if "known_assumptions" in data and data["known_assumptions"] is not None:
-        data["known_assumptions"] = [a if isinstance(a, dict) else a for a in data["known_assumptions"]]
-    for field, value in data.items():
+    # exclude_unset so an omitted key leaves the stored value alone; a
+    # caller clearing a list sends [] explicitly. As in create(), the dump
+    # recurses into nested component models on its own.
+    for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(playbook, field, value)
     db.commit()
     db.refresh(playbook)

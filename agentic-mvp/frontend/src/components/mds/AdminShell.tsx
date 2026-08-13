@@ -12,6 +12,24 @@ const NAV = [
   { to: "/app/admin2/rules", label: "Rules" },
 ];
 
+// The registry authoring surfaces. These are the full create/edit/delete
+// pages (pages/AgentsPage, SkillsPage, ToolsPage, PluginsPage, HooksPage,
+// PromptsPage) — the "Abilities" screen above is only the mockup's flat
+// read-only roll-up of the same rows, so without this group an Admin
+// landing on this shell had no way to author anything. Mounted here under
+// /app/admin2/* (see App.tsx) rather than left stranded on the legacy
+// /app/admin layout, which the Admin role no longer lands on.
+const BUILD_NAV = [
+  { to: "/app/admin2/agents", label: "Agents" },
+  { to: "/app/admin2/skills", label: "Skills" },
+  { to: "/app/admin2/tools", label: "Tools" },
+  { to: "/app/admin2/plugins", label: "Plugins" },
+  { to: "/app/admin2/hooks", label: "Hooks" },
+  { to: "/app/admin2/prompts", label: "Prompts" },
+  { to: "/app/admin2/personas", label: "Personas" },
+  { to: "/app/admin2/playbooks", label: "Playbooks" },
+];
+
 export default function AdminShell() {
   const { user, logout } = useAuth();
 
@@ -24,6 +42,24 @@ export default function AdminShell() {
         </div>
         <div className="items">
           {NAV.map((n) => (
+            <NavLink key={n.to} to={n.to} className={({ isActive }) => `mds-navbtn ${isActive ? "on" : ""}`}>
+              <span>{n.label}</span>
+            </NavLink>
+          ))}
+          <div
+            style={{
+              margin: "16px 10px 6px",
+              paddingTop: 14,
+              borderTop: "1px solid var(--mds-a700)",
+              fontSize: 11,
+              letterSpacing: ".09em",
+              textTransform: "uppercase",
+              opacity: 0.7,
+            }}
+          >
+            Build
+          </div>
+          {BUILD_NAV.map((n) => (
             <NavLink key={n.to} to={n.to} className={({ isActive }) => `mds-navbtn ${isActive ? "on" : ""}`}>
               <span>{n.label}</span>
             </NavLink>

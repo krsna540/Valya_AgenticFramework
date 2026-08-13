@@ -1,19 +1,27 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiError } from "../../api/client";
 import { skillsApi } from "../../api/skills";
 import { toolsApi } from "../../api/tools";
 import { promptsApi } from "../../api/prompts";
-import { hooksApi } from "../../api/registry";
+import { agentsApi, hooksApi, pluginsApi } from "../../api/registry";
 import { playbooksApi, type Playbook } from "../../api/playbooks";
-import type { Hook, Prompt, Skill, Tool } from "../../types";
+import type { Agent, Hook, Prompt, RegistryItem, Skill, Tool } from "../../types";
+import { useAuth } from "../../context/AuthContext";
 
-type TabKey = "skills" | "instructions" | "tools" | "guardrails" | "playbooks";
-const TABS: { key: TabKey; label: string }[] = [
-  { key: "skills", label: "Skills" },
-  { key: "instructions", label: "Instructions" },
-  { key: "tools", label: "Tools" },
-  { key: "guardrails", label: "Guardrails" },
-  { key: "playbooks", label: "Playbooks" },
+type TabKey = "agents" | "skills" | "instructions" | "tools" | "plugins" | "guardrails" | "playbooks";
+
+// `manage` is the authoring route for that kind — the full create/edit/
+// delete page mounted under this same shell (see App.tsx + AdminShell's
+// BUILD_NAV). Every kind now has one, Playbooks included.
+const TABS: { key: TabKey; label: string; manage: string | null }[] = [
+  { key: "agents", label: "Agents", manage: "/app/admin2/agents" },
+  { key: "skills", label: "Skills", manage: "/app/admin2/skills" },
+  { key: "instructions", label: "Instructions", manage: "/app/admin2/prompts" },
+  { key: "tools", label: "Tools", manage: "/app/admin2/tools" },
+  { key: "plugins", label: "Plugins", manage: "/app/admin2/plugins" },
+  { key: "guardrails", label: "Guardrails", manage: "/app/admin2/hooks" },
+  { key: "playbooks", label: "Playbooks", manage: "/app/admin2/playbooks" },
 ];
 
 interface Row {
@@ -38,7 +46,9 @@ const LIFECYCLE = [
 // this view is the mockup's "one flat list per kind" read surface on top of
 // that same data.
 export default function AbilitiesPage() {
-  const [tab, setTab] = useState<TabKey>("skills");
+  const { user } = useAuth();
+  const canAuthor = user?.role === "admin" || user?.role === "super_admin";
+  const [tab, setTab] = useState<TabKey>("agents");
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +58,14 @@ export default function AbilitiesPage() {
     setLoading(true);
     setError(null);
     const load = async (): Promise<Row[]> => {
+      if (tab === "agents") {
+        const agents = await agentsApi.list();
+        return agents.map((a: Agent) => ({ id: a.id, name: a.name, description: a.description, version: a.version, status: a.status }));
+      }
+      if (tab === "plugins") {
+        const plugins = await pluginsApi.list();
+        return plugins.map((p: RegistryItem) => ({ id: p.id, name: p.name, description: p.description, version: p.version, status: p.status }));
+      }
       if (tab === "skills") {
         const skills = await skillsApi.list();
         return skills.map((s: Skill) => ({ id: s.id, name: s.name, description: s.description, version: s.version, status: s.status }));
@@ -76,6 +94,9 @@ export default function AbilitiesPage() {
     };
   }, [tab]);
 
+  const activeTab = TABS.find((t) => t.key === tab) ?? TABS[0];
+  const manageHref = activeTab.manage;
+
   return (
     <div className="mds-col" style={{ maxWidth: 1040, gap: 30 }}>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 24 }}>
@@ -86,6 +107,11 @@ export default function AbilitiesPage() {
             reviewed, published and switched on there.
           </p>
         </div>
+        {canAuthor && manageHref && (
+          <Link to={manageHref} className="mds-btn mds-btn-primary" style={{ flex: "none", textDecoration: "none" }}>
+            + New {activeTab.label.replace(/s$/, "")}
+          </Link>
+        )}
       </div>
 
       {error && <p style={{ color: "var(--mds-a800)" }}>{error}</p>}
@@ -103,6 +129,7 @@ export default function AbilitiesPage() {
           <div className="mds-grow">Name</div>
           <div className="mds-fix" style={{ width: 100 }}>Version</div>
           <div className="mds-fix" style={{ width: 130 }}>Stage</div>
+          <div className="mds-fix" style={{ width: 80 }} />
         </div>
         {loading ? (
           <p className="mds-muted" style={{ padding: "20px 12px" }}>Loading…</p>
@@ -120,6 +147,13 @@ export default function AbilitiesPage() {
                 <span className={`mds-tag ${r.status === "Active" ? "mds-tag-accent" : r.status === "Deprecated" ? "mds-tag-outline" : "mds-tag-neutral"}`}>
                   {r.status}
                 </span>
+              </div>
+              <div className="mds-fix" style={{ width: 80, textAlign: "right" }}>
+                {canAuthor && manageHref && (
+                  <Link to={manageHref} className="mds-btn mds-btn-sm" style={{ textDecoration: "none" }}>
+                    Edit
+                  </Link>
+                )}
               </div>
             </div>
           ))

@@ -14,7 +14,10 @@
    visual differences are:
      - Super Admin: dark chrome nav rail (--a900 background) — see
        .rail.role-superadmin below.
-     - Admin: mid-steel nav rail (--a600 background) — .rail.role-admin.
+     - Admin: purple nav rail (--p600 background) — .rail.role-admin.
+       (Was mid-steel --a600; changed 2026-08-13 so the Admin console is
+       distinguishable at a glance from the Super Admin one, which is the
+       same hue at a different lightness and was easy to confuse.)
      - User: no rail at all — a top tab bar (.tabs/.tab) instead,
        because the user app is workspace/chat-centric rather than a
        settings-table-centric admin console.
@@ -35,6 +38,16 @@
   --mds-a700: #416180;
   --mds-a800: #2c455d;
   --mds-a900: #1d2d3d;
+
+  /* Admin rail purple ramp. Kept as its own scale rather than repointing
+     --mds-a600/700/800: those blues are shared by the superadmin rail, the
+     user tab bar's active state and every mds-tag-accent, so changing them
+     would recolour three other surfaces to fix one. Same lightness steps as
+     the a-ramp above so the existing hover/border rules transfer 1:1. */
+  --mds-p600: #6b53a3;
+  --mds-p700: #563f88;
+  --mds-p800: #3d2b64;
+  --mds-p900: #291c45;
 
   /* Neutral ramp */
   --mds-n100: #f5f5f8;
@@ -103,11 +116,11 @@
 }
 .mds-rail.role-superadmin { background: var(--mds-a900); }
 .mds-rail.role-admin {
-  background: var(--mds-a600);
-  border-right: 1px solid var(--mds-a800);
+  background: var(--mds-p600);
+  border-right: 1px solid var(--mds-p800);
 }
 .mds-rail .top { padding: 20px 20px 18px; border-bottom: 1px solid var(--mds-a800); }
-.mds-rail.role-admin .top { border-bottom-color: var(--mds-a700); }
+.mds-rail.role-admin .top { border-bottom-color: var(--mds-p700); }
 .mds-rail .org { font-family: var(--mds-font-head); font-size: 19px; font-weight: 600; }
 .mds-rail .me { font-size: 12.5px; opacity: .8; margin-top: 2px; }
 .mds-rail .items {
@@ -118,7 +131,7 @@
   padding: 16px; border-top: 1px solid var(--mds-a800);
   font-size: 12.5px; opacity: .8; line-height: 1.5;
 }
-.mds-rail.role-admin .foot { border-top-color: var(--mds-a700); }
+.mds-rail.role-admin .foot { border-top-color: var(--mds-p700); }
 
 .mds-navbtn {
   text-align: left; border: none; background: transparent;
@@ -126,8 +139,12 @@
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
 }
 .mds-rail.role-superadmin .mds-navbtn:hover { background: var(--mds-a800); }
-.mds-rail.role-admin .mds-navbtn:hover { background: var(--mds-a700); }
+.mds-rail.role-admin .mds-navbtn:hover { background: var(--mds-p700); }
 .mds-navbtn.on { background: var(--mds-bg); color: var(--mds-a900); }
+/* Selected item inverts to the page background, so its TEXT carries the
+   rail's hue — it has to follow the rail into purple or the active row
+   stays blue on an otherwise purple sidebar. */
+.mds-rail.role-admin .mds-navbtn.on { color: var(--mds-p900); }
 .mds-navbtn .badge { font-size: 11.5px; opacity: .75; }
 
 .mds-screen { flex: 1; min-width: 0; overflow: auto; padding: 48px 56px; }
