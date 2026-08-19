@@ -118,6 +118,7 @@ class AgentCreate(BaseModel):
     tool_ids: list[uuid.UUID] = Field(default_factory=list)
     plugin_ids: list[uuid.UUID] = Field(default_factory=list)
     hook_ids: list[uuid.UUID] = Field(default_factory=list)
+    playbook_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class AgentUpdate(BaseModel):
@@ -132,6 +133,7 @@ class AgentUpdate(BaseModel):
     tool_ids: list[uuid.UUID] | None = None
     plugin_ids: list[uuid.UUID] | None = None
     hook_ids: list[uuid.UUID] | None = None
+    playbook_ids: list[uuid.UUID] | None = None
 
 
 class AgentRead(BaseModel):
@@ -153,6 +155,7 @@ class AgentRead(BaseModel):
     tool_ids: list[uuid.UUID] = Field(default_factory=list)
     plugin_ids: list[uuid.UUID] = Field(default_factory=list)
     hook_ids: list[uuid.UUID] = Field(default_factory=list)
+    playbook_ids: list[uuid.UUID] = Field(default_factory=list)
 
     @classmethod
     def from_orm_agent(cls, agent) -> "AgentRead":
@@ -173,4 +176,5 @@ class AgentRead(BaseModel):
             tool_ids=[t.id for t in agent.tools],
             plugin_ids=[p.id for p in agent.plugins],
             hook_ids=[h.id for h in agent.hooks],
+            playbook_ids=[p.id for p in agent.playbooks],
         )

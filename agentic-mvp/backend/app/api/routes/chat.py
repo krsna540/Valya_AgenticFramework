@@ -23,12 +23,15 @@ from app.schemas.chat import (
     ConversationCreate,
     ConversationRead,
     ConversationWithMessages,
+    MessageFeedbackRequest,
+    MessageRead,
     SelectBranchRequest,
     SendMessageRequest,
     SiblingGroup,
     SiblingInfo,
     TitleResponse,
 )
+from app.services import registry_cache
 from app.services.agent_runner import stream_agent_response
 from app.services.hooks import HookContext, build_pipeline_for_agent, current_hook_context
 from app.services.thread import create_message, get_active_thread, get_siblings, select_branch
@@ -194,6 +197,27 @@ def patch_select_branch(
     return get_message_siblings(message_id, db, current_user)
 
 
+@router.patch("/messages/{message_id}/feedback", response_model=MessageRead)
+def patch_message_feedback(
+    message_id: uuid.UUID,
+    payload: MessageFeedbackRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Message:
+    message = db.get(Message, message_id)
+    if message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    _owned_conversation(db, message.conversation_id, current_user)
+    if message.role != "assistant":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only assistant messages accept feedback")
+
+    message.feedback = payload.feedback
+    message.feedback_reason = payload.reason if payload.feedback == "dislike" else None
+    db.commit()
+    db.refresh(message)
+    return message
+
+
 @router.post("/conversations/{conversation_id}/title", response_model=TitleResponse)
 def generate_title(
     conversation_id: uuid.UUID,
@@ -237,8 +261,13 @@ async def stream_message(
     # Eagerly touch relationships now, on the main sync path, so the
     # concurrent streaming tasks below never trigger their own lazy-load
     # queries against the shared session (see services/agent_runner.py).
+    # tools/skills/playbooks go through registry_cache instead of a direct
+    # touch: on a cache hit (the common case across a conversation's later
+    # turns) this skips the agent_tools/agent_skills/agent_playbooks join
+    # queries entirely rather than merely deferring them to here.
     for agent in target_agents:
-        _ = (agent.skills, agent.tools, agent.plugins, agent.hooks)
+        _ = (agent.plugins, agent.hooks)
+        registry_cache.get_capabilities(agent)
 
     attached_files: list[UploadedFile] = []
     if payload.file_ids:

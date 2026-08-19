@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { Citation, Message, ModelInfo, SiblingGroup, UploadedFileMeta } from "../../types";
 import MarkdownRenderer from "./MarkdownRenderer";
 import BranchNav from "./BranchNav";
+import MessageFeedbackControls from "./MessageFeedback";
 
 interface Props {
   message: Message;
@@ -35,7 +36,7 @@ function initialsOf(name: string): string {
  * tables, code) in a bordered balloon is what made this thread feel
  * cramped — prose needs the full column width to breathe.
  */
-export default function MessageBubble({
+function MessageBubble({
   message,
   agent,
   fileMeta = [],
@@ -149,19 +150,41 @@ export default function MessageBubble({
           content={message.content}
           citations={message.citations}
           onCitationClick={onCitationClick}
+          streaming={message.streaming}
         />
 
         {message.streaming && !message.content && <div className="qa-skeleton" aria-label="Generating response" />}
         {message.streaming && message.content && <span className="stream-cursor">▍</span>}
+
+        {!message.streaming && message.citations.length > 0 && (
+          <div className="qa-sources">
+            <span className="qa-sources-label">Sources ({message.citations.length})</span>
+            <div className="qa-sources-list">
+              {message.citations.map((c, i) => (
+                <button type="button" key={c.id} className="qa-source-chip" onClick={() => onCitationClick(c)}>
+                  <span className="qa-source-index">{i + 1}</span>
+                  {c.source}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {!message.streaming && message.content && (
         <div className="qa-answer-tools">
-          <button type="button" className="qa-tool" onClick={copy}>
+          <button type="button" className="qa-tool" aria-label="Copy message" onClick={copy}>
             {copied ? "Copied" : "Copy"}
           </button>
+          <MessageFeedbackControls
+            messageId={message.id}
+            initialFeedback={message.feedback ?? null}
+            initialReason={message.feedback_reason ?? null}
+          />
         </div>
       )}
     </div>
   );
 }
+
+export default memo(MessageBubble);

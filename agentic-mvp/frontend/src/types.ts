@@ -400,6 +400,8 @@ export interface Conversation {
   created_at: string;
 }
 
+export type MessageFeedback = "like" | "dislike" | null;
+
 export interface Message {
   id: string;
   conversation_id: string;
@@ -410,6 +412,8 @@ export interface Message {
   is_active_branch: boolean;
   citations: Citation[];
   file_ids: string[];
+  feedback?: MessageFeedback;
+  feedback_reason?: string | null;
   created_at: string;
   // client-only, while a response is still streaming in
   streaming?: boolean;

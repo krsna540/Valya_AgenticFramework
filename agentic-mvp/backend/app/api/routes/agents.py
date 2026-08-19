@@ -9,11 +9,13 @@ from app.core.database import get_db
 from app.core.tenant_scope import apply_shared_or_own_tenant, is_visible
 from app.models.agent import Agent
 from app.models.hook import Hook
+from app.models.playbook import Playbook
 from app.models.plugin import Plugin
 from app.models.skill import Skill
 from app.models.tool import Tool
 from app.models.user import User
 from app.schemas.registry import AgentCreate, AgentRead, AgentUpdate
+from app.services import registry_cache
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -74,6 +76,7 @@ def create_agent(
     agent.tools = _fetch_by_ids(db, Tool, payload.tool_ids, current_admin.tenant_id)
     agent.plugins = _fetch_by_ids(db, Plugin, payload.plugin_ids, current_admin.tenant_id)
     agent.hooks = _fetch_by_ids(db, Hook, payload.hook_ids, current_admin.tenant_id)
+    agent.playbooks = _fetch_by_ids(db, Playbook, payload.playbook_ids, current_admin.tenant_id)
 
     db.add(agent)
     db.commit()
@@ -106,11 +109,18 @@ def update_agent(
         agent.plugins = _fetch_by_ids(db, Plugin, data.pop("plugin_ids"), current_admin.tenant_id)
     if "hook_ids" in data:
         agent.hooks = _fetch_by_ids(db, Hook, data.pop("hook_ids"), current_admin.tenant_id)
+    if "playbook_ids" in data:
+        agent.playbooks = _fetch_by_ids(db, Playbook, data.pop("playbook_ids"), current_admin.tenant_id)
     for field, value in data.items():
         setattr(agent, field, value)
 
     db.commit()
     db.refresh(agent)
+    # The chat path caches this agent's flattened tool/skill/playbook specs
+    # across turns (app/services/registry_cache.py) precisely to avoid
+    # re-touching these relationships every message; an association edit
+    # here must not be served stale for the rest of that cache's TTL.
+    registry_cache.invalidate(agent.id)
     return AgentRead.from_orm_agent(agent)
 
 
@@ -121,4 +131,5 @@ def delete_agent(agent_id: uuid.UUID, db: Session = Depends(get_db), current_adm
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Platform-shared items cannot be deleted")
     db.delete(agent)
     db.commit()
+    registry_cache.invalidate(agent_id)
     return None

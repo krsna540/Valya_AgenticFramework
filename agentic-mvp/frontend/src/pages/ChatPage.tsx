@@ -67,6 +67,26 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [topology, setTopology] = useState<ProjectTopology | null>(null);
 
+  // Streamed tokens arrive far faster than a useful UI refresh rate — buffer
+  // them per-message and flush at most once per animation frame instead of
+  // triggering a React re-render (and a full markdown re-parse) per token.
+  const pendingTokensRef = useRef<Record<string, string>>({});
+  const flushScheduledRef = useRef(false);
+
+  function scheduleTokenFlush() {
+    if (flushScheduledRef.current) return;
+    flushScheduledRef.current = true;
+    requestAnimationFrame(() => {
+      flushScheduledRef.current = false;
+      const pending = pendingTokensRef.current;
+      pendingTokensRef.current = {};
+      if (Object.keys(pending).length === 0) return;
+      setMessages((prev) =>
+        prev.map((m) => (pending[m.id] !== undefined ? { ...m, content: m.content + pending[m.id] } : m)),
+      );
+    });
+  }
+
   useEffect(() => {
     if (!selectedProjectId) {
       setTopology(null);
@@ -300,10 +320,15 @@ export default function ChatPage() {
           },
           onToken: (e) => {
             const tempId = placeholders[e.agent_id];
-            setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, content: m.content + e.text } : m)));
+            pendingTokensRef.current[tempId] = (pendingTokensRef.current[tempId] ?? "") + e.text;
+            scheduleTokenFlush();
           },
           onStreamEnd: (e) => {
             const tempId = placeholders[e.agent_id];
+            // Final content comes verbatim from the server — drop any tokens
+            // still buffered for this message so a delayed flush can't
+            // reapply text on top of (or clobber) the settled content.
+            delete pendingTokensRef.current[tempId];
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === tempId

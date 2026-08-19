@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -5,6 +6,8 @@ import rehypeSanitize from "rehype-sanitize";
 import type { Components } from "react-markdown";
 import CodeBlock from "./CodeBlock";
 import CitationBadge from "./CitationBadge";
+import MarkdownTable from "./MarkdownTable";
+import { completeIncompleteMarkdown } from "../../lib/streamingMarkdown";
 import type { Citation } from "../../types";
 
 const CITATION_RE = /\[(\d+)\]/g;
@@ -60,24 +63,32 @@ interface Props {
   content: string;
   citations?: Citation[];
   onCitationClick?: (citation: Citation) => void;
+  /** true while the message is still streaming in — enables incomplete-
+   * markdown auto-completion so raw syntax never flashes mid-token. */
+  streaming?: boolean;
 }
 
 // Note: we intentionally do NOT enable rehype-raw (which would let raw HTML
-// in model output be parsed into real DOM elements). Without it,
+// in model output get parsed into real DOM elements). Without it,
 // react-markdown treats any literal HTML tags in the text as plain escaped
 // text, which is inherently XSS-safe. rehype-sanitize is kept as a defensive
 // second layer in case raw-HTML support is ever added later — this plays the
 // same "sanitization barrier" role the design doc describes for dompurify,
 // but integrated into the markdown AST pipeline instead of a post-hoc string
 // pass, which is the currently-recommended approach for this library combo.
-export default function MarkdownRenderer({ content, citations = [], onCitationClick = () => {} }: Props) {
+function MarkdownRenderer({ content, citations = [], onCitationClick = () => {}, streaming = false }: Props) {
+  const displayContent = useMemo(
+    () => (streaming ? completeIncompleteMarkdown(content) : content),
+    [content, streaming],
+  );
+
   const components: Components = {
     code({ className, children, ...rest }) {
       const match = /language-(\w+)/.exec(className || "");
       const text = String(children).replace(/\n$/, "");
       const isBlock = Boolean(match) || text.includes("\n");
       if (isBlock) {
-        return <CodeBlock language={match?.[1] ?? "text"} code={text} />;
+        return <CodeBlock language={match?.[1] ?? "text"} code={text} streaming={streaming} />;
       }
       return (
         <code className={className} {...rest}>
@@ -94,13 +105,27 @@ export default function MarkdownRenderer({ content, citations = [], onCitationCl
     td({ children }) {
       return <td>{injectCitations(children, citations, onCitationClick)}</td>;
     },
+    table({ children }) {
+      return <MarkdownTable>{children}</MarkdownTable>;
+    },
+    a({ children, href, ...rest }) {
+      return (
+        <a href={href} title={href} target="_blank" rel="noopener noreferrer" {...rest}>
+          {children}
+        </a>
+      );
+    },
   };
 
   return (
     <div className="markdown-body">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={components}>
-        {content}
+        {displayContent}
       </ReactMarkdown>
     </div>
   );
 }
+
+// A message that isn't currently streaming should never re-parse its
+// Markdown tree when a sibling message elsewhere in the thread updates.
+export default memo(MarkdownRenderer);

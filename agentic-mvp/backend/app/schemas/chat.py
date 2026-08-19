@@ -43,6 +43,8 @@ class MessageRead(BaseModel):
     is_active_branch: bool
     citations: list[Citation]
     file_ids: list[uuid.UUID]
+    feedback: str | None = None
+    feedback_reason: str | None = None
     created_at: datetime
 
 
@@ -80,6 +82,11 @@ class SiblingGroup(BaseModel):
 
 class SelectBranchRequest(BaseModel):
     message_id: uuid.UUID
+
+
+class MessageFeedbackRequest(BaseModel):
+    feedback: str | None = Field(default=None, pattern="^(like|dislike)$")
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class TitleResponse(BaseModel):

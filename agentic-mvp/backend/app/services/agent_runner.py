@@ -58,7 +58,7 @@ from app.agents.lifecycle import (
 from app.agents.runtime import AgentRunRequest
 from app.models.agent import Agent
 from app.models.file import UploadedFile
-from app.services import agent_run_store
+from app.services import agent_run_store, registry_cache
 from app.services.hooks import (
     HookContext,
     HookHaltException,
@@ -189,7 +189,12 @@ async def stream_agent_response(
 
     # Snapshot the agent's registry associations on this (synchronous) thread
     # before any concurrency starts — the graph runs in tasks that must never
-    # trigger a lazy load against the shared Session.
+    # trigger a lazy load against the shared Session. tools/skills/playbooks
+    # come from registry_cache rather than the ORM relationships directly:
+    # the chat route (api/routes/chat.py) already warmed this agent's entry
+    # on the sync path before this function's caller was scheduled as a
+    # task, so this is a cache read, never a fresh query, from here.
+    caps = registry_cache.get_capabilities(agent)
     request = AgentRunRequest.from_agent(
         agent,
         objective=task,
@@ -199,6 +204,9 @@ async def stream_agent_response(
         user_id=hook_context.user_id,
         run_id=str(run_id),
         trace_id=hook_context.trace_id,
+        tools=caps["tools"],
+        skills=caps["skills"],
+        playbooks=caps["playbooks"],
     )
 
     gate = _ToolGateSink(hook_manager, hook_context)
@@ -323,6 +331,7 @@ def _to_wire_event(event: LifecycleEvent, agent_id: str) -> dict[str, Any] | Non
     # frontend simply doesn't subscribe to, so emitting it is safe today and
     # gives the Run Observatory a live feed to render tomorrow.
     if event.type in (
+        EventType.PLAYBOOK_SELECTED,
         EventType.PLAN_READY,
         EventType.STEP_START,
         EventType.STEP_END,

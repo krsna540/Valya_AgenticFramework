@@ -1652,6 +1652,153 @@ tr.row-selected {
   color: var(--ink);
 }
 
+/* — like / dislike feedback — */
+
+.qa-answer:has(.qa-feedback.has-feedback) .qa-answer-tools {
+  opacity: 1;
+}
+
+.qa-feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qa-feedback-dislike-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.qa-feedback-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qa-feedback-btn.active {
+  color: var(--knw);
+}
+
+.qa-feedback-dislike-wrap .qa-feedback-btn.active {
+  color: var(--err);
+}
+
+.qa-feedback-reason-tag {
+  font-size: 11px;
+  color: var(--faint);
+  background: var(--color-neutral-200);
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+.qa-reason-picker {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  width: 280px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px rgba(18, 22, 27, 0.14);
+  padding: 12px;
+}
+
+.qa-reason-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.qa-reason-chip {
+  background: var(--color-neutral-200);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--color-neutral-700);
+  font-size: 11.5px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.qa-reason-chip:hover {
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.qa-reason-free {
+  display: flex;
+  gap: 6px;
+}
+
+.qa-reason-free .input {
+  flex: 1;
+  font-size: 12.5px;
+  padding: 6px 9px;
+}
+
+/* — sources strip fallback — */
+
+.qa-sources {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.qa-sources-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 6px;
+}
+
+.qa-sources-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.qa-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px 4px 6px;
+  font-size: 12px;
+  color: var(--color-neutral-700);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qa-source-chip:hover {
+  border-color: var(--knw);
+  color: var(--ink);
+}
+
+.qa-source-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  background: var(--knw);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  flex-shrink: 0;
+}
+
 /* — editing a question in place — */
 
 .qa-edit {
@@ -2418,12 +2565,31 @@ tr.row-selected {
 
 /* — tables — */
 
-.markdown-body table {
-  display: block;
+.md-table-wrap {
+  margin: 0 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.md-table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 5px 8px;
+  background: var(--color-neutral-200);
+  border-bottom: 1px solid var(--line);
+}
+
+.md-table-scroll {
   overflow-x: auto;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.markdown-body table {
   width: 100%;
   border-collapse: collapse;
-  margin: 0 0 14px;
+  margin: 0;
   font-size: 13.5px;
 }
 
@@ -2433,12 +2599,29 @@ tr.row-selected {
   padding: 7px 11px;
   text-align: left;
   vertical-align: top;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .markdown-body th {
   background: var(--color-neutral-200);
   font-weight: 600;
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+/* remark-gfm sets these inline per the `:---`/`:---:`/`---:` column spec */
+.markdown-body td[align="right"],
+.markdown-body th[align="right"] {
+  text-align: right;
+}
+
+.markdown-body td[align="center"],
+.markdown-body th[align="center"] {
+  text-align: center;
 }
 
 .markdown-body tbody tr:nth-child(even) td {
@@ -2508,6 +2691,12 @@ tr.row-selected {
   font-size: 12px;
 }
 
+.code-block-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .code-lang {
   color: var(--muted);
   text-transform: uppercase;
@@ -2516,13 +2705,31 @@ tr.row-selected {
   font-family: var(--font-mono);
 }
 
+.code-generating {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--knw);
+  font-style: italic;
+}
+
+.code-generating-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: blink 1.2s ease-in-out infinite;
+}
+
 .code-block-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.copy-btn {
+.copy-btn,
+.icon-toggle-btn {
   background: transparent;
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
@@ -2530,10 +2737,59 @@ tr.row-selected {
   font-size: 11px;
   padding: 3px 8px;
   cursor: pointer;
+  line-height: 1;
 }
 
-.copy-btn:hover {
+.icon-toggle-btn {
+  font-family: var(--font-mono);
+  min-width: 24px;
+}
+
+.copy-btn:hover,
+.icon-toggle-btn:hover {
   color: var(--ink);
+}
+
+.icon-toggle-btn.active {
+  color: var(--knw);
+  border-color: var(--color-accent-300);
+  background: var(--knw-soft);
+}
+
+.code-block-body {
+  position: relative;
+}
+
+.code-block.collapsed .code-block-body {
+  max-height: 420px;
+  overflow: hidden;
+}
+
+.code-block.collapsed .code-block-body::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 48px;
+  background: linear-gradient(180deg, transparent, var(--chrome) 85%);
+  pointer-events: none;
+}
+
+.code-block-expand {
+  display: block;
+  width: 100%;
+  background: var(--chrome-2);
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 11.5px;
+  padding: 6px;
+  cursor: pointer;
+}
+
+.code-block-expand:hover {
+  color: #fff;
 }
 
 .code-block-plain {
@@ -2545,6 +2801,49 @@ tr.row-selected {
   font-size: 13px;
   overflow-x: auto;
   white-space: pre-wrap;
+}
+
+.code-block-plain.nowrap {
+  white-space: pre;
+}
+
+.code-block-diff {
+  margin: 0;
+  padding: 0;
+  background: var(--chrome);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-x: auto;
+}
+
+.code-block-diff.wrap .diff-line code {
+  white-space: pre-wrap;
+}
+
+.diff-line {
+  display: flex;
+  padding: 1px 12px;
+}
+
+.diff-line code {
+  background: none;
+  color: inherit;
+  padding: 0;
+  white-space: pre;
+}
+
+.diff-ctx {
+  color: #c6c9cf;
+}
+
+.diff-add {
+  background: rgba(35, 154, 96, 0.18);
+  color: #7ee2a8;
+}
+
+.diff-del {
+  background: rgba(196, 67, 43, 0.18);
+  color: #f2a596;
 }
 
 .artifact-frame {
@@ -3133,3 +3432,12 @@ tr.row-selected {
 .toggle.on::after { right: 2px; left: auto; }
 .toggle.off { background: var(--line); }
 .toggle.off::after { left: 2px; }
+
+/* — touch devices have no hover state, so message actions must be visible
+   at rest rather than hidden behind a hover reveal — */
+@media (hover: none) {
+  .qa-ask-tools,
+  .qa-answer-tools {
+    opacity: 1;
+  }
+}

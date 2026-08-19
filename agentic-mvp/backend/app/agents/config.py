@@ -80,6 +80,12 @@ class AgentRuntimeConfig(BaseModel):
     execute_tools: bool = False
     #: Emit token-level SSE while the executor drafts. Off = one block per node.
     stream_tokens: bool = True
+    #: Ceiling on how many plan steps the executor runs concurrently within
+    #: one dependency "wave" (see Plan.execution_waves). 1 recovers the old
+    #: fully-sequential behaviour; the default lets an independent-steps plan
+    #: finish in roughly one step's latency instead of N, while still
+    #: bounding fan-out against a model gateway's own rate limits.
+    max_step_concurrency: int = Field(default=4, ge=1, le=20)
     #: Escalate to a human instead of degrading when the budget runs out.
     escalate_on_budget_exhausted: bool = False
 

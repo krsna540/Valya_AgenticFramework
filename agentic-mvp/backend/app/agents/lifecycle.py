@@ -72,6 +72,7 @@ class EventType(str, enum.Enum):
     NODE_END = "node_end"
     NODE_RETRY = "node_retry"
     NODE_ERROR = "node_error"
+    PLAYBOOK_SELECTED = "playbook_selected"
     PLAN_READY = "plan_ready"
     STEP_START = "step_start"
     STEP_END = "step_end"

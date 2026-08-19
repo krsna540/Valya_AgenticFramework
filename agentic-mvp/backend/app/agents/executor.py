@@ -3,9 +3,12 @@
 Two distinct phases inside one node, and keeping them distinct is what makes
 the critic's job possible:
 
-  1. **Step execution.** Each `PlanStep` in dependency order: optionally
-     invoke its tool, optionally load its skill's SKILL.md, then ask the
-     model to perform that step. Each produces a `StepResult`.
+  1. **Step execution.** `PlanStep`s run in dependency waves
+     (`Plan.execution_waves`): each wave's steps run concurrently, bounded by
+     `config.max_step_concurrency`, and a wave only starts once every step it
+     depends on has produced a result. Within a step: optionally invoke its
+     tool, optionally load its skill's SKILL.md, then ask the model to
+     perform that step. Each produces a `StepResult`.
   2. **Synthesis.** Fold the step results into one answer addressed to the
      user. Streamed token-by-token when enabled, because this is the only
      part the user actually reads.
@@ -27,6 +30,7 @@ explicitly shown failed steps and can call `revise` or `escalate` on them.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -90,32 +94,49 @@ class ExecutorAgent(BaseAgent):
         }
 
         steps = plan.ordered_steps()
+        index_by_id = {step.id: i for i, step in enumerate(steps, start=1)}
         targeted = set(critique.target_step_ids) if critique and critique.target_step_ids else None
         carried = self._carried_forward_results(state, revision, targeted)
         carried_ids = {r.step_id for r in carried}
 
         tokens = {"input": 0, "output": 0, "calls": 0}
         results: list[StepResult] = list(carried)
+        semaphore = asyncio.Semaphore(max(1, self.config.max_step_concurrency))
 
-        for index, step in enumerate(steps, start=1):
-            if targeted is not None and step.id not in targeted:
-                continue  # already carried forward above
-            result = await self._run_step(
-                state=state,
-                step=step,
-                index=index,
-                total=len(steps),
-                prior_results=results,
-                tools=tools,
-                skills=skills,
-                revision=revision,
-                tokens=tokens,
-            )
-            results.append(result)
+        # Run in dependency waves rather than one step at a time: everything
+        # in a wave has already had its dependencies satisfied by an earlier
+        # wave (Plan.execution_waves), so nothing in it can legitimately need
+        # another wave member's output. `snapshot` is taken once per wave,
+        # before any of its steps start, so two independent steps run
+        # concurrently never see each other's result mid-flight — each sees
+        # exactly what a fully sequential run would have shown it at that
+        # point, no more.
+        for wave in plan.execution_waves():
+            runnable = [s for s in wave if targeted is None or s.id in targeted]
+            if not runnable:
+                continue  # every member already carried forward above
+            snapshot = list(results)
+
+            async def _run_bounded(step: PlanStep, prior: list[StepResult] = snapshot) -> StepResult:
+                async with semaphore:
+                    return await self._run_step(
+                        state=state,
+                        step=step,
+                        index=index_by_id[step.id],
+                        total=len(steps),
+                        prior_results=prior,
+                        tools=tools,
+                        skills=skills,
+                        revision=revision,
+                        tokens=tokens,
+                    )
+
+            wave_results = await asyncio.gather(*(_run_bounded(s) for s in runnable))
+            results.extend(wave_results)
 
         # Order the current pass's results back into plan order — carried-
-        # forward steps were prepended, so without this the synthesis prompt
-        # reads them out of sequence.
+        # forward steps were prepended and waves may finish out of step
+        # order, so without this the synthesis prompt reads them scrambled.
         order = {s.id: i for i, s in enumerate(steps)}
         results.sort(key=lambda r: order.get(r.step_id, len(order)))
 

@@ -59,7 +59,7 @@ from app.agents.state import (
     get_plan,
     new_state,
 )
-from app.agents.tools import SkillSpec, ToolSpec, build_tool_invoker
+from app.agents.tools import PlaybookSpec, SkillSpec, ToolSpec, build_tool_invoker
 from app.agents.tracing import set_span_attributes, set_span_outputs, traced_span, update_current_trace
 
 logger = logging.getLogger("agentic_mvp.agents.runtime")
@@ -91,6 +91,7 @@ class AgentRunRequest(BaseModel):
 
     tools: list[dict[str, Any]] = Field(default_factory=list)
     skills: list[dict[str, Any]] = Field(default_factory=list)
+    playbooks: list[dict[str, Any]] = Field(default_factory=list)
     context_documents: list[dict[str, Any]] = Field(default_factory=list)
 
     config: AgentRuntimeConfig = Field(default_factory=AgentRuntimeConfig)
@@ -113,13 +114,24 @@ class AgentRunRequest(BaseModel):
         config_overrides: dict[str, Any] | None = None,
         run_id: str | None = None,
         trace_id: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        skills: list[dict[str, Any]] | None = None,
+        playbooks: list[dict[str, Any]] | None = None,
     ) -> AgentRunRequest:
         """Snapshot an `Agent` ORM row into a request.
 
         Must be called on the thread that owns the Session — see the module
         docstring on capability snapshotting.
+
+        `tools`/`skills`/`playbooks` accept pre-flattened spec dicts so a
+        caller that already has them (app/services/registry_cache.py, which
+        caches these across chat turns for the same agent) can skip touching
+        the ORM relationships a second time. Left as None, this reads
+        `agent.tools`/`agent.skills`/`agent.playbooks` directly, which is the
+        only path any caller other than the chat route needs (the Temporal
+        activity path, tests).
         """
-        tools = [
+        tools = tools if tools is not None else [
             ToolSpec(
                 name=t.name,
                 description=t.description,
@@ -131,7 +143,7 @@ class AgentRunRequest(BaseModel):
             ).model_dump()
             for t in (agent.tools or [])
         ]
-        skills = [
+        skills = skills if skills is not None else [
             SkillSpec(
                 name=s.name,
                 description=s.description,
@@ -139,6 +151,17 @@ class AgentRunRequest(BaseModel):
                 allowed_tools=getattr(s, "allowed_tools", None),
             ).model_dump()
             for s in (agent.skills or [])
+        ]
+        playbooks = playbooks if playbooks is not None else [
+            PlaybookSpec(
+                name=p.name,
+                description=p.description,
+                when_to_use=getattr(p, "when_to_use", "") or "",
+                canonical_steps=getattr(p, "canonical_steps", None) or [],
+                required_criteria=getattr(p, "required_criteria", None) or [],
+                known_assumptions=getattr(p, "known_assumptions", None) or [],
+            ).model_dump()
+            for p in (getattr(agent, "playbooks", None) or [])
         ]
         return cls(
             objective=objective,
@@ -155,6 +178,7 @@ class AgentRunRequest(BaseModel):
             user_id=user_id,
             tools=tools,
             skills=skills,
+            playbooks=playbooks,
             context_documents=context_documents or [],
             config=AgentRuntimeConfig.from_agent(agent, config_overrides),
         )
@@ -174,6 +198,7 @@ class AgentRunRequest(BaseModel):
             system_prompt=self.system_prompt,
             available_tools=self.tools,
             available_skills=self.skills,
+            available_playbooks=self.playbooks,
             context_documents=self.context_documents,
         )
         # The model route(s) travel in the scratchpad rather than as a

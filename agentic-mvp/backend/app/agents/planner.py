@@ -30,6 +30,7 @@ from app.agents.base import AgentOutcome, AgentRole, BaseAgent
 from app.agents.errors import PlanValidationError, ProviderError
 from app.agents.lifecycle import EventType
 from app.agents.llm import LLMMessage, LLMRequest
+from app.agents.playbooks import select_relevant_playbooks
 from app.agents.prompts import (
     PLAN_SCHEMA_HINT,
     planner_system_prompt,
@@ -44,7 +45,7 @@ from app.agents.state import (
     get_plan,
     resolve_model_route,
 )
-from app.agents.tools import SkillSpec, ToolSpec
+from app.agents.tools import PlaybookSpec, SkillSpec, ToolSpec
 
 logger = logging.getLogger("agentic_mvp.agents.planner")
 
@@ -70,8 +71,21 @@ class PlannerAgent(BaseAgent):
     async def _invoke(self, state: AgentState) -> AgentOutcome:
         tools = [ToolSpec.model_validate(t) for t in state.get("available_tools") or []]
         skills = [SkillSpec.model_validate(s) for s in state.get("available_skills") or []]
+        playbooks = [
+            PlaybookSpec.model_validate(p) for p in state.get("available_playbooks") or []
+        ]
         revision = int(state.get("revision") or 0)
         replan_count = int(state.get("replan_count") or 0)
+
+        objective = str(state.get("objective") or "")
+        selected_playbooks = select_relevant_playbooks(objective, playbooks)
+        if selected_playbooks:
+            await self._sink.emit(
+                self._ctx.event(
+                    EventType.PLAYBOOK_SELECTED,
+                    playbook_names=[p.name for p in selected_playbooks],
+                )
+            )
 
         system = planner_system_prompt(
             agent_name=str(state.get("agent_name") or "agent"),
@@ -80,6 +94,7 @@ class PlannerAgent(BaseAgent):
             skills=skills,
             max_steps=self.config.max_plan_steps,
             language=str(state.get("language") or "en"),
+            playbooks=selected_playbooks,
         )
         user = planner_user_prompt(
             objective=str(state.get("objective") or ""),

@@ -32,6 +32,18 @@ agent_hooks = Table(
     Column("hook_id", UUID(as_uuid=True), ForeignKey("hooks.id", ondelete="CASCADE"), primary_key=True),
 )
 
+# Playbooks (app/models/playbook.py) were storage-only until now — this is
+# the runtime-wiring association its own docstring flagged as deferred: it
+# lets an admin attach the procedural-memory rows a given Agent's Planner
+# should consider. See app/agents/playbooks.py for the selection step that
+# reads it.
+agent_playbooks = Table(
+    "agent_playbooks",
+    Base.metadata,
+    Column("agent_id", UUID(as_uuid=True), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True),
+    Column("playbook_id", UUID(as_uuid=True), ForeignKey("playbooks.id", ondelete="CASCADE"), primary_key=True),
+)
+
 
 class Agent(RegistryMixin, TenantScopedMixin, Base):
     __tablename__ = "agents"
@@ -68,3 +80,4 @@ class Agent(RegistryMixin, TenantScopedMixin, Base):
     tools = relationship("Tool", secondary=agent_tools)
     plugins = relationship("Plugin", secondary=agent_plugins)
     hooks = relationship("Hook", secondary=agent_hooks)
+    playbooks = relationship("Playbook", secondary=agent_playbooks)

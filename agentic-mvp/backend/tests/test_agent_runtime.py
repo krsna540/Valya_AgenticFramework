@@ -59,7 +59,14 @@ from app.agents.state import (
     take_max,
     transition,
 )
-from app.agents.tools import DescribeOnlyToolInvoker, SkillSpec, ToolInvocation, ToolSpec
+from app.agents.playbooks import select_relevant_playbooks
+from app.agents.tools import (
+    DescribeOnlyToolInvoker,
+    PlaybookSpec,
+    SkillSpec,
+    ToolInvocation,
+    ToolSpec,
+)
 
 AGENT_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -241,6 +248,101 @@ def test_ordered_steps_survives_a_dependency_cycle():
     assert {s.id for s in plan.ordered_steps()} == {"a", "b"}
 
 
+def test_execution_waves_groups_independent_steps_together():
+    """Two steps that depend on the same predecessor, and on nothing else,
+    belong in the same wave — that's what makes them safe to run concurrently."""
+    plan = Plan.model_validate(
+        {
+            "objective": "x",
+            "steps": [
+                {"id": "a", "title": "A", "instruction": "a", "depends_on": []},
+                {"id": "b", "title": "B", "instruction": "b", "depends_on": ["a"]},
+                {"id": "c", "title": "C", "instruction": "c", "depends_on": ["a"]},
+            ],
+        }
+    )
+    waves = plan.execution_waves()
+    assert [sorted(s.id for s in wave) for wave in waves] == [["a"], ["b", "c"]]
+
+
+def test_execution_waves_is_a_single_wave_for_a_fully_independent_plan():
+    plan = Plan.model_validate(
+        {
+            "objective": "x",
+            "steps": [
+                {"id": "a", "title": "A", "instruction": "a", "depends_on": []},
+                {"id": "b", "title": "B", "instruction": "b", "depends_on": []},
+            ],
+        }
+    )
+    waves = plan.execution_waves()
+    assert len(waves) == 1
+    assert {s.id for s in waves[0]} == {"a", "b"}
+
+
+def test_execution_waves_is_one_step_per_wave_for_a_linear_chain():
+    plan = Plan.model_validate(
+        {
+            "objective": "x",
+            "steps": [
+                {"id": "a", "title": "A", "instruction": "a", "depends_on": []},
+                {"id": "b", "title": "B", "instruction": "b", "depends_on": ["a"]},
+                {"id": "c", "title": "C", "instruction": "c", "depends_on": ["b"]},
+            ],
+        }
+    )
+    waves = plan.execution_waves()
+    assert [[s.id for s in wave] for wave in waves] == [["a"], ["b"], ["c"]]
+
+
+def test_execution_waves_survives_a_dependency_cycle():
+    """Same "don't crash" contract as ordered_steps — a cycle must not raise
+    or hang, even though the resulting grouping is best-effort."""
+    plan = Plan.model_validate(
+        {
+            "objective": "x",
+            "steps": [
+                {"id": "a", "title": "A", "instruction": "a", "depends_on": ["b"]},
+                {"id": "b", "title": "B", "instruction": "b", "depends_on": ["a"]},
+            ],
+        }
+    )
+    waves = plan.execution_waves()
+    assert {s.id for wave in waves for s in wave} == {"a", "b"}
+
+
+# --- playbooks ----------------------------------------------------------------
+
+
+def _playbook(name: str, when_to_use: str) -> PlaybookSpec:
+    return PlaybookSpec(name=name, when_to_use=when_to_use)
+
+
+def test_select_relevant_playbooks_ranks_by_lexical_overlap():
+    refund = _playbook("refund-flow", "Use when the customer asks for a refund on an order")
+    onboarding = _playbook("onboarding", "Use when a new user is setting up their account")
+    selected = select_relevant_playbooks(
+        "The customer wants a refund for their last order", [refund, onboarding]
+    )
+    assert [p.name for p in selected] == ["refund-flow"]
+
+
+def test_select_relevant_playbooks_returns_nothing_below_the_relevance_floor():
+    unrelated = _playbook("unrelated", "Use when scheduling a dentist appointment")
+    assert select_relevant_playbooks("Explain the revenue drivers.", [unrelated]) == []
+
+
+def test_select_relevant_playbooks_caps_at_top_k():
+    playbooks = [_playbook(f"p{i}", "Use for refund requests on an order") for i in range(5)]
+    selected = select_relevant_playbooks("refund request on an order", playbooks, top_k=2)
+    assert len(selected) == 2
+
+
+def test_select_relevant_playbooks_handles_no_playbooks_or_empty_objective():
+    assert select_relevant_playbooks("anything", []) == []
+    assert select_relevant_playbooks("", [_playbook("p", "refund")]) == []
+
+
 # --- llm: JSON coercion -----------------------------------------------------
 
 
@@ -407,6 +509,47 @@ async def test_planner_enforces_the_max_plan_steps_budget():
     assert result.status == RunStatus.FAILED
 
 
+@pytest.mark.asyncio
+async def test_a_relevant_playbook_reaches_the_planner_prompt_and_emits_an_event():
+    provider = ScriptedLLMProvider(planner=[plan_json(steps=1)])
+    request = make_request(
+        playbooks=[
+            PlaybookSpec(
+                name="refund-flow",
+                when_to_use="Use when the customer asks for a refund on an order",
+                canonical_steps=[{"title": "Verify order", "detail": "Look up the order id"}],
+                required_criteria=["State the refund amount explicitly"],
+            ).model_dump()
+        ],
+    )
+    request = request.model_copy(update={"objective": "The customer wants a refund on order 42"})
+    _, _, sink = await run_graph(provider, request)
+
+    planner_prompts = [p for purpose, p in provider.calls if purpose == "planner"]
+    assert any("refund-flow" in p for p in planner_prompts)
+    assert any("State the refund amount explicitly" in p for p in planner_prompts)
+    selected = sink.of_type(EventType.PLAYBOOK_SELECTED)
+    assert selected and selected[0].data["playbook_names"] == ["refund-flow"]
+
+
+@pytest.mark.asyncio
+async def test_an_irrelevant_playbook_is_left_out_of_the_planner_prompt():
+    provider = ScriptedLLMProvider(planner=[plan_json(steps=1)])
+    request = make_request(
+        playbooks=[
+            PlaybookSpec(
+                name="dentist-scheduling",
+                when_to_use="Use when scheduling a dentist appointment",
+            ).model_dump()
+        ],
+    )
+    _, _, sink = await run_graph(provider, request)
+
+    planner_prompts = [p for purpose, p in provider.calls if purpose == "planner"]
+    assert not any("dentist-scheduling" in p for p in planner_prompts)
+    assert sink.of_type(EventType.PLAYBOOK_SELECTED) == []
+
+
 # --- executor ---------------------------------------------------------------
 
 
@@ -469,6 +612,117 @@ async def test_a_failed_step_does_not_fail_the_run():
     assert update["status"] != RunStatus.FAILED.value if "status" in update else True
     assert update["step_results"][0]["status"] == StepStatus.FAILED.value
     assert update["draft_answer"]
+
+
+@pytest.mark.asyncio
+async def test_independent_steps_run_concurrently_and_respect_the_concurrency_cap():
+    """Three steps with no dependencies between them are one wave; the cap
+    (max_step_concurrency=2) must still be honoured within that wave."""
+    from app.agents.executor import ExecutorAgent
+
+    concurrency = {"current": 0, "seen": 0}
+
+    class ConcurrencyTrackingProvider(LLMProvider):
+        name = "tracking"
+
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            if request.purpose != "executor":
+                return LLMResponse(text="{}", model=request.model)
+            concurrency["current"] += 1
+            concurrency["seen"] = max(concurrency["seen"], concurrency["current"])
+            await asyncio.sleep(0.02)
+            concurrency["current"] -= 1
+            return LLMResponse(text="ok", model=request.model, output_tokens=1)
+
+        async def stream(self, request: LLMRequest) -> AsyncIterator[str]:
+            response = await self.complete(request)
+
+            async def _iter() -> AsyncIterator[str]:
+                yield response.text
+
+            return _iter()
+
+    plan = Plan.model_validate(
+        {
+            "objective": "x",
+            "steps": [
+                {"id": "a", "title": "A", "instruction": "do a", "depends_on": []},
+                {"id": "b", "title": "B", "instruction": "do b", "depends_on": []},
+                {"id": "c", "title": "C", "instruction": "do c", "depends_on": []},
+            ],
+        }
+    )
+    agent = ExecutorAgent(
+        llm=ConcurrencyTrackingProvider(),
+        config=AgentRuntimeConfig(retry_backoff_s=0.001, max_step_concurrency=2),
+    )
+    state = new_state(run_id="r", agent_id=AGENT_ID, agent_name="a", objective="o")
+    state["plan"] = plan.model_dump(mode="json")
+    state["phase"] = RunPhase.PLANNING.value
+
+    update = await agent(state)
+
+    assert len(update["step_results"]) == 3
+    assert all(r["status"] == StepStatus.SUCCEEDED.value for r in update["step_results"])
+    # Genuinely parallel (more than one in flight at once) but never past the cap.
+    assert concurrency["seen"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_downstream_step_sees_upstream_results_but_not_its_wave_sibling():
+    """Correctness under concurrency: a step run in parallel with another
+    must not see that sibling's output (it doesn't depend on it), but a step
+    in a later wave must see every result from the wave(s) before it."""
+    from app.agents.executor import ExecutorAgent
+
+    instructions = {"a": "produce value alpha", "b": "produce value beta", "c": "combine alpha and beta"}
+
+    class RecordingProvider(LLMProvider):
+        name = "recording"
+
+        def __init__(self) -> None:
+            self.captured: dict[str, str] = {}
+
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            if request.purpose != "executor":
+                return LLMResponse(text="{}", model=request.model)
+            prompt = "\n".join(m.content for m in request.messages)
+            for step_id, instruction in instructions.items():
+                if instruction in prompt:
+                    self.captured[step_id] = prompt
+                    return LLMResponse(text=f"output_{step_id}", model=request.model, output_tokens=1)
+            return LLMResponse(text="synthesis", model=request.model, output_tokens=1)
+
+        async def stream(self, request: LLMRequest) -> AsyncIterator[str]:
+            response = await self.complete(request)
+
+            async def _iter() -> AsyncIterator[str]:
+                yield response.text
+
+            return _iter()
+
+    plan = Plan.model_validate(
+        {
+            "objective": "x",
+            "steps": [
+                {"id": "a", "title": "A", "instruction": instructions["a"], "depends_on": []},
+                {"id": "b", "title": "B", "instruction": instructions["b"], "depends_on": []},
+                {"id": "c", "title": "C", "instruction": instructions["c"], "depends_on": ["a", "b"]},
+            ],
+        }
+    )
+    provider = RecordingProvider()
+    agent = ExecutorAgent(llm=provider, config=AgentRuntimeConfig(retry_backoff_s=0.001))
+    state = new_state(run_id="r", agent_id=AGENT_ID, agent_name="a", objective="o")
+    state["plan"] = plan.model_dump(mode="json")
+    state["phase"] = RunPhase.PLANNING.value
+
+    await agent(state)
+
+    assert "output_b" not in provider.captured["a"]
+    assert "output_a" not in provider.captured["b"]
+    assert "output_a" in provider.captured["c"]
+    assert "output_b" in provider.captured["c"]
 
 
 @pytest.mark.asyncio

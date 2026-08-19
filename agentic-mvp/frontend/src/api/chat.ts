@@ -3,6 +3,8 @@ import { API_BASE_URL, api, getToken } from "./client";
 import type {
   Conversation,
   ConversationWithMessages,
+  Message,
+  MessageFeedback,
   SiblingGroup,
   SseErrorEvent,
   SseSkillCallEvent,
@@ -29,6 +31,8 @@ export const chatApi = {
   selectBranch: (messageId: string, targetMessageId: string) =>
     api.patch<SiblingGroup>(`/chat/messages/${messageId}/select-branch`, { message_id: targetMessageId }),
   generateTitle: (conversationId: string) => api.post<{ title: string }>(`/chat/conversations/${conversationId}/title`),
+  setFeedback: (messageId: string, feedback: MessageFeedback, reason?: string | null) =>
+    api.patch<Message>(`/chat/messages/${messageId}/feedback`, { feedback, reason: reason ?? null }),
 };
 
 export interface StreamMessageArgs {

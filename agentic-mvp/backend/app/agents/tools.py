@@ -65,6 +65,36 @@ class ToolSpec(BaseModel):
         return f"- {self.name}{flags}: {self.description or 'no description provided'}"
 
 
+class PlaybookSpec(BaseModel):
+    """A playbook as the runtime sees it — flattened from a `Playbook`
+    registry row (app/models/playbook.py) at run start and snapshotted into
+    `AgentState.available_playbooks`, same "session-pinned skeleton"
+    discipline as ToolSpec/SkillSpec.
+
+    Only the §11.5 procedural-memory fields travel into the runtime — the
+    authoring-surface fields (target_persona, few_shot_examples, ...) are for
+    the human author's editing view, not the Planner's selection or prompt.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    description: str | None = None
+    #: When the Planner should reach for this playbook at all — the
+    #: selection signal (app/agents/playbooks.py scores the objective
+    #: against this, not against `description`).
+    when_to_use: str = ""
+    #: [{title, detail, condition?, else_detail?}, ...]
+    canonical_steps: list[dict[str, Any]] = Field(default_factory=list)
+    required_criteria: list[str] = Field(default_factory=list)
+    #: [{assumption, evidence_note}, ...] — scar tissue worth surfacing as a
+    #: caution to the planner, not just to a human reviewer.
+    known_assumptions: list[dict[str, Any]] = Field(default_factory=list)
+
+    def prompt_line(self) -> str:
+        return f"- {self.name}: {self.when_to_use or self.description or 'no guidance provided'}"
+
+
 class SkillSpec(BaseModel):
     """A skill as the runtime sees it. `body_markdown` is the SKILL.md body,
     loaded only on activation — the metadata tier (name + description) is

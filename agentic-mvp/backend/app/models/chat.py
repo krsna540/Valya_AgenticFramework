@@ -62,6 +62,11 @@ class Message(Base):
     is_active_branch: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     citations: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     file_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    # User-submitted feedback on an assistant reply — "like" | "dislike" | null.
+    # Mutually exclusive by construction (single column, not two booleans).
+    feedback: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Optional reason chip/free-text captured when feedback == "dislike".
+    feedback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     conversation = relationship("Conversation", back_populates="messages")

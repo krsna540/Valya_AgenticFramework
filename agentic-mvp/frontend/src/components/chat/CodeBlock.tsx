@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import jsx from "react-syntax-highlighter/dist/esm/languages/prism/jsx";
@@ -38,9 +38,12 @@ SyntaxHighlighter.registerLanguage("yml", yaml);
 interface CodeBlockProps {
   language: string;
   code: string;
+  /** true while the parent message is still streaming in. */
+  streaming?: boolean;
 }
 
 const ARTIFACT_LANGUAGES = new Set(["html", "svg"]);
+const DIFF_LANGUAGES = new Set(["diff", "patch"]);
 const REGISTERED_LANGUAGES = new Set([
   "jsx",
   "tsx",
@@ -62,10 +65,60 @@ const REGISTERED_LANGUAGES = new Set([
   "yml",
 ]);
 
-export default function CodeBlock({ language, code }: CodeBlockProps) {
-  const isArtifact = ARTIFACT_LANGUAGES.has(language.toLowerCase());
+const EXTENSION_BY_LANGUAGE: Record<string, string> = {
+  jsx: "jsx",
+  tsx: "tsx",
+  typescript: "ts",
+  ts: "ts",
+  javascript: "js",
+  js: "js",
+  python: "py",
+  py: "py",
+  bash: "sh",
+  sh: "sh",
+  json: "json",
+  css: "css",
+  html: "html",
+  xml: "xml",
+  svg: "svg",
+  sql: "sql",
+  yaml: "yaml",
+  yml: "yml",
+  diff: "diff",
+  patch: "patch",
+};
+
+const COLLAPSE_LINE_THRESHOLD = 25;
+
+function DiffBlock({ code, wrap }: { code: string; wrap: boolean }) {
+  const lines = code.split("\n");
+  return (
+    <pre className={`code-block-diff${wrap ? " wrap" : ""}`}>
+      {lines.map((line, i) => {
+        const kind = line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "ctx";
+        return (
+          <div key={i} className={`diff-line diff-${kind}`}>
+            <code>{line || " "}</code>
+          </div>
+        );
+      })}
+    </pre>
+  );
+}
+
+export default function CodeBlock({ language, code, streaming = false }: CodeBlockProps) {
+  const lang = language.toLowerCase();
+  const isArtifact = ARTIFACT_LANGUAGES.has(lang);
+  const isDiff = DIFF_LANGUAGES.has(lang);
   const [tab, setTab] = useState<"source" | "preview">(isArtifact ? "preview" : "source");
   const [copied, setCopied] = useState(false);
+  const [showLineNumbers, setShowLineNumbers] = useState(false);
+  const [wrap, setWrap] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  const lineCount = useMemo(() => code.split("\n").length, [code]);
+  const collapsible = lineCount > COLLAPSE_LINE_THRESHOLD;
+  const collapsed = collapsible && !expanded;
 
   function handleCopy() {
     navigator.clipboard.writeText(code).catch(() => undefined);
@@ -73,61 +126,104 @@ export default function CodeBlock({ language, code }: CodeBlockProps) {
     setTimeout(() => setCopied(false), 1500);
   }
 
+  function handleDownload() {
+    const ext = EXTENSION_BY_LANGUAGE[lang] ?? "txt";
+    const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `snippet.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const previewDoc =
-    language.toLowerCase() === "svg"
+    lang === "svg"
       ? `<!doctype html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;">${code}</body></html>`
       : code;
 
   return (
-    <div className="code-block">
+    <div className={`code-block${collapsed ? " collapsed" : ""}`}>
       <div className="code-block-header">
-        <span className="code-lang">{language || "text"}</span>
+        <div className="code-block-header-left">
+          <span className="code-lang">{language || "text"}</span>
+          {streaming && (
+            <span className="code-generating" title="Generating">
+              <span className="code-generating-dot" />
+              generating
+            </span>
+          )}
+        </div>
         <div className="code-block-actions">
           {isArtifact && (
             <div className="tab-switch">
-              <button
-                type="button"
-                className={tab === "source" ? "active" : ""}
-                onClick={() => setTab("source")}
-              >
+              <button type="button" className={tab === "source" ? "active" : ""} onClick={() => setTab("source")}>
                 Source
               </button>
-              <button
-                type="button"
-                className={tab === "preview" ? "active" : ""}
-                onClick={() => setTab("preview")}
-              >
+              <button type="button" className={tab === "preview" ? "active" : ""} onClick={() => setTab("preview")}>
                 Preview
               </button>
             </div>
           )}
+          {!isArtifact && !isDiff && (
+            <>
+              <button
+                type="button"
+                className={`icon-toggle-btn${showLineNumbers ? " active" : ""}`}
+                title={showLineNumbers ? "Hide line numbers" : "Show line numbers"}
+                aria-pressed={showLineNumbers}
+                onClick={() => setShowLineNumbers((v) => !v)}
+              >
+                #
+              </button>
+              <button
+                type="button"
+                className={`icon-toggle-btn${wrap ? " active" : ""}`}
+                title={wrap ? "Disable wrap" : "Wrap long lines"}
+                aria-pressed={wrap}
+                onClick={() => setWrap((v) => !v)}
+              >
+                ⤾
+              </button>
+            </>
+          )}
+          <button type="button" className="copy-btn" title="Download as file" onClick={handleDownload}>
+            ↓
+          </button>
           <button type="button" className="copy-btn" onClick={handleCopy}>
             {copied ? "Copied" : "Copy"}
           </button>
         </div>
       </div>
 
-      {isArtifact && tab === "preview" ? (
-        // Sandboxed with scripts allowed but NOT allow-same-origin, so
-        // artifact code can't reach the parent app's cookies/localStorage/DOM.
-        <iframe
-          className="artifact-frame"
-          sandbox="allow-scripts"
-          srcDoc={previewDoc}
-          title="Artifact preview"
-        />
-      ) : REGISTERED_LANGUAGES.has(language.toLowerCase()) ? (
-        <SyntaxHighlighter
-          language={language.toLowerCase()}
-          style={oneDark}
-          customStyle={{ margin: 0, borderRadius: 0, fontSize: 13 }}
-        >
-          {code}
-        </SyntaxHighlighter>
-      ) : (
-        <pre className="code-block-plain">
-          <code>{code}</code>
-        </pre>
+      <div className="code-block-body">
+        {isArtifact && tab === "preview" ? (
+          // Sandboxed with scripts allowed but NOT allow-same-origin, so
+          // artifact code can't reach the parent app's cookies/localStorage/DOM.
+          <iframe className="artifact-frame" sandbox="allow-scripts" srcDoc={previewDoc} title="Artifact preview" />
+        ) : isDiff ? (
+          <DiffBlock code={code} wrap={wrap} />
+        ) : REGISTERED_LANGUAGES.has(lang) ? (
+          <SyntaxHighlighter
+            language={lang}
+            style={oneDark}
+            showLineNumbers={showLineNumbers}
+            wrapLongLines={wrap}
+            customStyle={{ margin: 0, borderRadius: 0, fontSize: 13 }}
+          >
+            {code}
+          </SyntaxHighlighter>
+        ) : (
+          <pre className={`code-block-plain${wrap ? "" : " nowrap"}`}>
+            <code>{code}</code>
+          </pre>
+        )}
+      </div>
+
+      {collapsible && (
+        <button type="button" className="code-block-expand" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : `Show ${lineCount - COLLAPSE_LINE_THRESHOLD} more lines`}
+        </button>
       )}
     </div>
   );

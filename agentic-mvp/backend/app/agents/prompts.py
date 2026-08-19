@@ -27,7 +27,7 @@ import json
 from typing import Any
 
 from app.agents.state import Critique, Plan, StepResult
-from app.agents.tools import SkillSpec, ToolSpec, load_skill_context
+from app.agents.tools import PlaybookSpec, SkillSpec, ToolSpec, load_skill_context
 
 # --- shared fragments -------------------------------------------------------
 
@@ -66,6 +66,40 @@ def _capability_block(tools: list[ToolSpec], skills: list[SkillSpec]) -> str:
     if not lines:
         lines.append("No tools or skills are available; reason from the provided context only.")
     return "\n".join(lines)
+
+
+def _playbook_block(playbooks: list[PlaybookSpec]) -> str:
+    """Render the playbooks the selection step (app/agents/playbooks.py)
+    judged relevant to this objective. Only ever called with an
+    already-filtered list — the full attached catalogue is never dumped into
+    the prompt, matching the "selection, not enumeration" design of §11.5.
+    """
+    if not playbooks:
+        return ""
+    sections = ["Relevant playbooks for this objective — use their canonical steps as a starting decomposition, but adapt them; do not copy steps that do not fit:"]
+    for playbook in playbooks:
+        lines = [f"### Playbook: {playbook.name}"]
+        if playbook.when_to_use:
+            lines.append(f"When to use: {playbook.when_to_use}")
+        if playbook.canonical_steps:
+            steps_text = "\n".join(
+                f"  {i}. {step.get('title', '')}: {step.get('detail', '')}".rstrip(": ")
+                for i, step in enumerate(playbook.canonical_steps, start=1)
+            )
+            lines.append(f"Canonical steps:\n{steps_text}")
+        if playbook.required_criteria:
+            lines.append(
+                "The resulting plan must satisfy: "
+                + "; ".join(playbook.required_criteria)
+            )
+        if playbook.known_assumptions:
+            notes = "; ".join(
+                a.get("assumption", "") for a in playbook.known_assumptions if a.get("assumption")
+            )
+            if notes:
+                lines.append(f"Known pitfalls from past runs: {notes}")
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections)
 
 
 def _context_block(documents: list[dict[str, Any]]) -> str:
@@ -128,6 +162,7 @@ def planner_system_prompt(
     skills: list[SkillSpec],
     max_steps: int,
     language: str,
+    playbooks: list[PlaybookSpec] | None = None,
 ) -> str:
     base = system_prompt.strip() if system_prompt else ""
     return "\n\n".join(
@@ -148,6 +183,7 @@ def planner_system_prompt(
                 "non-destructive tool when either would do."
             ),
             _capability_block(tools, skills),
+            _playbook_block(playbooks or []),
             "Rate complexity honestly — it decides whether an expensive review pass runs.",
             language_clause(language),
         ]

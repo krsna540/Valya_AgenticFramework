@@ -281,6 +281,32 @@ class Plan(BaseModel):
         resolved.extend(s for s in self.steps if s.id not in seen)
         return resolved
 
+    def execution_waves(self) -> list[list[PlanStep]]:
+        """Group `ordered_steps()` into waves the executor can run
+        concurrently: every step in a wave has all its dependencies satisfied
+        by an earlier wave, so nothing in a wave depends on anything else in
+        it.
+
+        Built by assigning each step a level (1 + the max level of its
+        resolved dependencies, 0 if it has none) while walking the already
+        topologically-sorted `ordered_steps()` — a dependency is therefore
+        always leveled before its dependent, except for a cycle member,
+        which falls back to level 0 exactly when `ordered_steps()` falls back
+        to declaration order for it. That is the same "don't crash, make
+        best-effort progress" contract `ordered_steps()` already documents,
+        not a new failure mode this method introduces.
+        """
+        ordered = self.ordered_steps()
+        level: dict[str, int] = {}
+        for step in ordered:
+            dep_levels = [level[d] for d in step.depends_on if d in level]
+            level[step.id] = (max(dep_levels) + 1) if dep_levels else 0
+        wave_count = max(level.values(), default=-1) + 1
+        waves: list[list[PlanStep]] = [[] for _ in range(wave_count)]
+        for step in ordered:
+            waves[level[step.id]].append(step)
+        return waves
+
 
 class StepResult(BaseModel):
     """What the executor produced for one PlanStep."""
@@ -373,6 +399,10 @@ class AgentState(TypedDict, total=False):
     #: discipline docs/agent_runtime_architecture.md §4 locks for agents.
     available_tools: Annotated[list[dict[str, Any]], keep_last]
     available_skills: Annotated[list[dict[str, Any]], keep_last]
+    #: Playbooks attached to this Agent, unfiltered. The Planner scores and
+    #: selects from these per turn (app/agents/playbooks.py) — never the
+    #: Executor, per PLATFORM_ARCHITECTURE.md §11.5.
+    available_playbooks: Annotated[list[dict[str, Any]], keep_last]
     context_documents: Annotated[list[dict[str, Any]], keep_last]
 
     # --- control (the state machine proper) ---
@@ -419,6 +449,7 @@ def new_state(
     system_prompt: str | None = None,
     available_tools: list[dict[str, Any]] | None = None,
     available_skills: list[dict[str, Any]] | None = None,
+    available_playbooks: list[dict[str, Any]] | None = None,
     context_documents: list[dict[str, Any]] | None = None,
 ) -> AgentState:
     """Build a complete, valid initial state. The only supported way to
@@ -438,6 +469,7 @@ def new_state(
         system_prompt=system_prompt,
         available_tools=available_tools or [],
         available_skills=available_skills or [],
+        available_playbooks=available_playbooks or [],
         context_documents=context_documents or [],
         phase=RunPhase.PENDING.value,
         status=RunStatus.RUNNING.value,
