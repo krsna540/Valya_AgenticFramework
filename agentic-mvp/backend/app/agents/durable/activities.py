@@ -32,7 +32,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from temporalio import activity
 
-from app.agents.lifecycle import EventSink, LifecycleEvent
+from app.agents.lifecycle import CompositeEventSink, EventSink, LifecycleEvent
 from app.agents.runtime import AgentRunRequest, AgentRunResult, AgentRuntime
 
 logger = logging.getLogger("agentic_mvp.agents.durable.activities")
@@ -132,10 +132,29 @@ async def execute_agent_graph(request: AgentRunRequest) -> AgentRunResult:
     durability mechanism layered on the first, for the cost of duplicating
     the control flow. Temporal's job here is the envelope: retry the run,
     time-bound it, keep it visible, and pause it for a human.
+
+    **Event visibility.** Heartbeating alone makes the run inspectable from
+    Temporal's own UI, but not from the same `events`/`agent_run_steps`
+    tables (and Redis fan-out) an in-process chat run already writes to —
+    imported here, not at module scope, so a durability-only deployment
+    never pays for the DB/Redis client import.
     """
+    from app.agents.event_persistence import PostgresEventSink
+    from app.services import agent_run_store
+
     activity.logger.info("Executing agent graph for run %s", request.run_id)
+    run_id = uuid.UUID(request.run_id)
+    sink = CompositeEventSink(
+        _HeartbeatSink(),
+        agent_run_store.PersistingEventSink(run_id),
+        PostgresEventSink(
+            run_id,
+            tenant_id=_maybe_uuid(request.tenant_id),
+            project_id=_maybe_uuid(request.project_id),
+        ),
+    )
     runtime = AgentRuntime()
-    result = await runtime.run(request, sink=_HeartbeatSink())
+    result = await runtime.run(request, sink=sink)
     activity.logger.info(
         "Run %s finished: %s (%d revisions)", request.run_id, result.status.value, result.revisions
     )

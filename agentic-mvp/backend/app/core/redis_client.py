@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import redis.asyncio as redis_async
@@ -96,6 +97,37 @@ async def publish_run_event(run_id: str, event: dict[str, Any]) -> None:
         await get_redis().publish(run_channel(run_id), json.dumps(event))
     except Exception:  # noqa: BLE001 — a lost publish costs a UI update, never correctness
         logger.warning("Failed to publish event for run %s (non-fatal, client will replay)", run_id, exc_info=True)
+
+
+async def subscribe_run_events(run_id: str) -> AsyncIterator[dict[str, Any]]:
+    """Live relay of one run's events, published by `publish_run_event`.
+
+    The accelerator, not the record: a subscriber that connects late or
+    drops a message sees a gap, never a wrong answer, because the durable
+    write (the `events` table, via `PostgresEventSink`) happens alongside
+    this publish, not instead of it. A caller that needs completeness reads
+    the table; this is for a client that wants the next event as soon as
+    possible.
+    """
+    pubsub = get_redis().pubsub()
+    channel = run_channel(run_id)
+    try:
+        await pubsub.subscribe(channel)
+        async for message in pubsub.listen():
+            if message.get("type") != "message":
+                continue
+            try:
+                yield json.loads(message["data"])
+            except (TypeError, ValueError):
+                logger.warning("Dropping malformed event on %s (non-fatal)", channel)
+    except Exception:  # noqa: BLE001 — a broken relay must not break the caller's run
+        logger.warning("Event relay for run %s ended unexpectedly (non-fatal)", run_id, exc_info=True)
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # --- pure-tool result cache (§6.1) ------------------------------------------

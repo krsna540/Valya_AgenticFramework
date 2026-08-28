@@ -41,13 +41,14 @@ pre-emptive block; `_ToolGateSink` documents that trade in full.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
-from app.agents.durable import get_runner
+from app.agents.durable import DurableRunner, get_runner
 from app.agents.event_persistence import PostgresEventSink
 from app.agents.lifecycle import (
     CompositeEventSink,
@@ -56,6 +57,7 @@ from app.agents.lifecycle import (
     LifecycleEvent,
 )
 from app.agents.runtime import AgentRunRequest
+from app.core.redis_client import subscribe_run_events
 from app.models.agent import Agent
 from app.models.file import UploadedFile
 from app.services import agent_run_store, registry_cache
@@ -219,37 +221,48 @@ async def stream_agent_response(
     episodic = PostgresEventSink(run_id, tenant_id=agent.tenant_id, project_id=None)
     sink = CompositeEventSink(gate, persist, episodic)
 
-    agent_run_store.create_run(
-        run_id=run_id,
-        agent_id=agent.id,
-        objective=task,
-        trace_id=hook_context.trace_id,
-        tenant_id=agent.tenant_id,
-        user_id=_maybe_uuid(hook_context.user_id),
-        conversation_id=_maybe_uuid(hook_context.conversation_id),
-        language=request.language,
-        model_name=agent.model_name,
-        runtime_config=request.config.model_dump(),
-        thread_id=request.thread_id or str(run_id),
-    )
+    # Which backend this turn actually runs on — Temporal when enabled, else
+    # in-process (app/agents/durable/selector.py). No longer forced local:
+    # the merged event stream below keeps token-level streaming alive on the
+    # durable path too, via the Redis relay PostgresEventSink already feeds.
+    runner = get_runner()
 
-    # Interactive chat takes the in-process path: the caller is holding an SSE
-    # connection open, so durability buys nothing here and token-level
-    # streaming only exists locally. See app/agents/durable/selector.py.
-    runner = get_runner(prefer_local=True)
+    # The workflow's own `persist_run_start` activity creates this row for a
+    # durable run, stamped with the real workflow_id. Creating it here too
+    # would race that insert and — since create_run has no update-on-conflict
+    # path (app/services/agent_run_store.py) — permanently strand the row's
+    # workflow_id at None, breaking the human-in-the-loop signal lookup in
+    # api/routes/runs.py::decide_run. Only the in-process path owns this
+    # write; the durable path's own activity owns it for a Temporal run.
+    if runner.name != "temporal":
+        agent_run_store.create_run(
+            run_id=run_id,
+            agent_id=agent.id,
+            objective=task,
+            trace_id=hook_context.trace_id,
+            tenant_id=agent.tenant_id,
+            user_id=_maybe_uuid(hook_context.user_id),
+            conversation_id=_maybe_uuid(hook_context.conversation_id),
+            language=request.language,
+            model_name=agent.model_name,
+            runtime_config=request.config.model_dump(),
+            thread_id=request.thread_id or str(run_id),
+        )
 
     final_answer = ""
-    final_event: LifecycleEvent | None = None
+    final_data: dict[str, Any] | None = None
+    final_revision = 0
     citations = _citations_from_files(attached_files)
 
     try:
-        async for event in runner.stream(request, extra_sink=sink):
-            wire = _to_wire_event(event, agent_id)
+        async for event_type, data, phase, revision in _stream_events(runner, request, run_id, sink):
+            wire = _to_wire_event(event_type, data, agent_id, phase=phase, revision=revision)
             if wire is not None:
                 yield wire
-            if event.type == EventType.RUN_END and event.data.get("final"):
-                final_event = event
-                final_answer = str(event.data.get("final_answer") or "")
+            if event_type == EventType.RUN_END and data.get("final"):
+                final_data = data
+                final_revision = revision
+                final_answer = str(data.get("final_answer") or "")
     except Exception as exc:  # noqa: BLE001 — the turn's fault boundary
         logger.exception("Agent run %s failed", run_id)
         await notify(hook_manager, hook_context, {"stage": "agent_execution", "error": str(exc)})
@@ -273,15 +286,30 @@ async def stream_agent_response(
     runtime = getattr(runner, "runtime", None)
     run_result = getattr(runtime, "last_result", None) if runtime is not None else None
     if run_result is not None:
+        # In-process only: the durable path's own persist_run_finish activity
+        # already wrote the terminal row from inside the workflow.
         await agent_run_store.finalize_run(
             run_id,
             run_result.state,  # type: ignore[arg-type]
             duration_ms=duration_ms,
             citations=citations,
         )
-        hook_context.metadata["agent_run_id"] = str(run_id)
-        hook_context.metadata["critic_verdict"] = run_result.critic_verdict
-        hook_context.metadata["revisions"] = run_result.revisions
+        critic_verdict = run_result.critic_verdict
+        revisions = run_result.revisions
+        needs_human_review = run_result.needs_human_review
+    else:
+        # Durable: read the same fields off the authoritative final RUN_END
+        # event instead (see _stream_events) — TemporalRunner has no
+        # `.runtime` attribute, so `run_result` is always None here, but the
+        # values still exist, carried on the event `TemporalRunner.stream()`
+        # builds from the completed AgentRunResult.
+        final_data = final_data or {}
+        critic_verdict = final_data.get("critic_verdict")
+        revisions = final_revision
+        needs_human_review = bool(final_data.get("needs_human_review", False))
+    hook_context.metadata["agent_run_id"] = str(run_id)
+    hook_context.metadata["critic_verdict"] = critic_verdict
+    hook_context.metadata["revisions"] = revisions
 
     yield {
         "type": "stream_end",
@@ -294,43 +322,137 @@ async def stream_agent_response(
         # Extra keys are additive: the existing frontend ignores what it
         # doesn't read, and the Run Observatory reads these.
         "run_id": str(run_id),
-        "status": (final_event.data.get("status") if final_event else "failed"),
-        "revisions": (run_result.revisions if run_result else 0),
-        "critic_verdict": (run_result.critic_verdict if run_result else None),
-        "needs_human_review": (run_result.needs_human_review if run_result else False),
+        "status": (final_data.get("status") if final_data else "failed"),
+        "revisions": revisions,
+        "critic_verdict": critic_verdict,
+        "needs_human_review": needs_human_review,
     }
 
 
-def _to_wire_event(event: LifecycleEvent, agent_id: str) -> dict[str, Any] | None:
+async def _merge_event_streams(
+    *iterators: AsyncIterator[Any],
+) -> AsyncGenerator[Any, None]:
+    """Fan multiple async iterators into one, in arrival order.
+
+    Same fan-in shape `api/routes/chat.py`'s multi-agent `event_generator`
+    already uses (one queue, one pump task per source) — reused here rather
+    than reinvented. Yields until every source is exhausted; if the caller
+    stops consuming early, whatever is still pumping gets cancelled.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    _DONE = object()
+
+    async def _pump(it: AsyncIterator[Any]) -> None:
+        try:
+            async for item in it:
+                await queue.put(item)
+        finally:
+            await queue.put(_DONE)
+
+    tasks = [asyncio.create_task(_pump(it)) for it in iterators]
+    remaining = len(tasks)
+    try:
+        while remaining:
+            item = await queue.get()
+            if item is _DONE:
+                remaining -= 1
+                continue
+            yield item
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _stream_events(
+    runner: DurableRunner,
+    request: AgentRunRequest,
+    run_id: uuid.UUID,
+    sink: EventSink,
+) -> AsyncGenerator[tuple[EventType, dict[str, Any], str, int], None]:
+    """Yield `(event_type, data, phase, revision)` uniformly regardless of
+    which runner actually executed the turn.
+
+    The in-process path streams `LifecycleEvent`s directly — full fidelity,
+    nothing else needed. The Temporal path fans in two sources: a live Redis
+    relay (tokens, tool/skill calls, step progress — the granularity
+    `TemporalRunner.stream()`'s own 1s status polling can't provide, see its
+    module docstring) merged with `runner.stream()` itself, which still owns
+    `RUN_START`, human-review pauses, and — critically — the authoritative
+    final `RUN_END`, built from the completed `AgentRunResult` rather than
+    relayed from inside the activity. The relay's own per-node `RUN_END`
+    (from `graph.py::finalize_node`) never sets `data["final"]`, so there is
+    no ambiguity about which one is the real one.
+    """
+    if runner.name != "temporal":
+        async for event in runner.stream(request, extra_sink=sink):
+            yield event.type, event.data, event.phase or "", event.revision
+        return
+
+    async def _relay() -> AsyncGenerator[tuple[EventType, dict[str, Any], str, int], None]:
+        async for raw in subscribe_run_events(str(run_id)):
+            try:
+                event_type = EventType(raw.get("type"))
+            except ValueError:
+                continue  # unknown/future event name — an observer must never choke on one
+            yield (
+                event_type,
+                raw.get("data") or {},
+                str(raw.get("phase") or ""),
+                int(raw.get("revision") or 0),
+            )
+
+    async def _authoritative() -> AsyncGenerator[tuple[EventType, dict[str, Any], str, int], None]:
+        async for event in runner.stream(request, extra_sink=sink):
+            yield event.type, event.data, event.phase or "", event.revision
+
+    async for item in _merge_event_streams(_relay(), _authoritative()):
+        yield item
+
+
+def _to_wire_event(
+    event_type: EventType,
+    data: dict[str, Any],
+    agent_id: str,
+    *,
+    phase: str = "",
+    revision: int = 0,
+) -> dict[str, Any] | None:
     """Map a runtime lifecycle event onto the frontend's SSE vocabulary.
+
+    Takes the type/data pair rather than a `LifecycleEvent` so the same
+    mapping serves both a live in-process event and one decoded off the
+    Redis relay (`subscribe_run_events`), which carries the same shape as a
+    plain dict, never a `LifecycleEvent` instance.
 
     Returns None for events with no wire equivalent. An allowlist rather than
     a passthrough: a new lifecycle event should never reach a frontend that
     doesn't know how to render it.
     """
-    if event.type == EventType.TOKEN:
-        return {"type": "token", "agent_id": agent_id, "text": event.data.get("text", "")}
+    if event_type == EventType.TOKEN:
+        return {"type": "token", "agent_id": agent_id, "text": data.get("text", "")}
 
-    if event.type == EventType.TOOL_CALL:
+    if event_type == EventType.TOOL_CALL:
         return {
             "type": "tool_call",
             "agent_id": agent_id,
-            "tool_name": event.data.get("tool_name"),
-            "step_id": event.data.get("step_id"),
+            "tool_name": data.get("tool_name"),
+            "step_id": data.get("step_id"),
         }
 
-    if event.type == EventType.SKILL_CALL:
+    if event_type == EventType.SKILL_CALL:
         return {
             "type": "skill_call",
             "agent_id": agent_id,
-            "skill_name": event.data.get("skill_name"),
-            "step_id": event.data.get("step_id"),
+            "skill_name": data.get("skill_name"),
+            "step_id": data.get("step_id"),
         }
 
     # Progress events. `agent_status` is a new event name the current
     # frontend simply doesn't subscribe to, so emitting it is safe today and
     # gives the Run Observatory a live feed to render tomorrow.
-    if event.type in (
+    if event_type in (
         EventType.PLAYBOOK_SELECTED,
         EventType.PLAN_READY,
         EventType.STEP_START,
@@ -342,10 +464,10 @@ def _to_wire_event(event: LifecycleEvent, agent_id: str) -> dict[str, Any] | Non
         return {
             "type": "agent_status",
             "agent_id": agent_id,
-            "stage": event.type.value,
-            "phase": event.phase,
-            "revision": event.revision,
-            **event.data,
+            "stage": event_type.value,
+            "phase": phase,
+            "revision": revision,
+            **data,
         }
 
     return None

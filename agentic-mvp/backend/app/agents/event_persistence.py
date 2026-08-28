@@ -71,7 +71,17 @@ class PostgresEventSink(EventSink):
         # publish_run_event itself.
         await asyncio.gather(
             asyncio.to_thread(self._insert, event, seq),
-            publish_run_event(str(self._run_id), {"seq": seq, "type": event.type.value, "ts": event.at.isoformat(), "data": event.data}),
+            publish_run_event(
+                str(self._run_id),
+                {
+                    "seq": seq,
+                    "type": event.type.value,
+                    "ts": event.at.isoformat(),
+                    "phase": event.phase,
+                    "revision": event.revision,
+                    "data": event.data,
+                },
+            ),
             return_exceptions=True,
         )
 

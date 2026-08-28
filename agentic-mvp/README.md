@@ -430,12 +430,19 @@ the original unscoped behavior.
 
 ## Notes on the chat / agent execution
 
-`app/services/agent_runner.py` still returns a deterministic stub reply (not
-a real model) so the full flow — login → pick agent(s) → stream a reply,
-attach a file, branch, compare — works end-to-end without an LLM API key.
-Swap the body of `stream_agent_response()` for a real provider's streaming
-API when ready; the route layer doesn't need to change since it already
-consumes an async generator of the same event shapes.
+`app/services/agent_runner.py` is a thin adapter: it translates between the
+chat SSE contract and the Planner → Executor → Critic runtime in
+`app/agents/` (see `docs/AGENT_RUNTIME.md`). What makes the full flow — login
+→ pick agent(s) → stream a reply, attach a file, branch, compare — work
+without an LLM API key is the **stub LLM provider** (`AGENT_LLM_PROVIDER=stub`,
+the default), which returns structurally valid plans and critiques rather than
+canned prose. Set `AGENT_LLM_PROVIDER=direct` plus an `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` for real generation; the route layer doesn't change, since it
+already consumes an async generator of the same event shapes.
+
+Recent changes to how runs are scheduled and orchestrated — DAG-based plan-step
+execution and full Temporal routing with live event visibility — are written up
+in **[`README_CHANGES.md`](README_CHANGES.md)**.
 
 ## What's intentionally simple (v1 scope)
 

@@ -126,16 +126,29 @@ result `simulated=True` — a silently-faked tool result is worse than none.
 
 ## 6. Durability
 
-| | `LocalRunner` (default) | `TemporalRunner` |
+| | `LocalRunner` | `TemporalRunner` |
 |---|---|---|
-| Token streaming | ✅ | ❌ (coarse phase polling) |
+| Token streaming | ✅ (direct) | ✅ (via the Redis relay) |
 | Survives restart | ❌ | ✅ |
 | HITL pause | ❌ | ✅ (signal, up to 3 days) |
 | Retry policy | in-node only | + activity-level |
 
-**Interactive chat deliberately uses `LocalRunner`** (`prefer_local=True`): the
-caller already holds an SSE connection open, so durability buys nothing there,
-and token-level streaming only exists on the local path.
+**Interactive chat runs through Temporal too** when `TEMPORAL_ENABLED=true`
+(the docker-compose default). It used to be pinned to `LocalRunner` via
+`prefer_local=True`, because Temporal has no push stream from an in-flight
+activity — `TemporalRunner.stream()` polls the workflow's `status` query about
+once a second, which is far too coarse for chat.
+
+That is now solved by fanning in two sources rather than downgrading the UX:
+the Redis channel `PostgresEventSink` publishes to carries live tokens and
+step progress, while `runner.stream()` still supplies `RUN_START`, phase
+transitions, and the authoritative final `RUN_END`. See
+`services/agent_runner.py::_stream_events` and `README_CHANGES.md`.
+
+Only one side may create the `agent_runs` row: for a durable run the
+workflow's own `persist_run_start` activity owns it (it stamps `workflow_id`),
+so `agent_runner.py` skips its direct `create_run` call. Creating it on both
+sides strands `workflow_id` at `NULL` and silently breaks HITL signalling.
 
 The workflow runs the **whole graph as one activity**, not one activity per
 node. Per-node activities would force the routing logic to be reimplemented in
@@ -144,11 +157,14 @@ already provides within-run resumability. Temporal's job is the envelope:
 retry, time-bound, keep visible, and pause for a human.
 
 ```bash
-docker compose --profile temporal up      # temporal + temporal-ui + agent-worker
+docker compose up      # temporal + temporal-ui + agent-worker start with everything else
 ```
 
-`TEMPORAL_ENABLED=true` is also required — starting the cluster doesn't by
-itself route runs through it.
+There are no compose profiles — every service starts by default, and both
+`TEMPORAL_ENABLED=true` and `AGENT_CHECKPOINTER=postgres` are already the
+compose/`.env.example` defaults, so runs route through the durable envelope
+out of the box. The class-level fallbacks in `app/core/config.py` stay
+`False`/`memory` so the test suite never reaches for a Temporal server.
 
 ---
 

@@ -281,31 +281,89 @@ class Plan(BaseModel):
         resolved.extend(s for s in self.steps if s.id not in seen)
         return resolved
 
-    def execution_waves(self) -> list[list[PlanStep]]:
-        """Group `ordered_steps()` into waves the executor can run
-        concurrently: every step in a wave has all its dependencies satisfied
-        by an earlier wave, so nothing in a wave depends on anything else in
-        it.
-
-        Built by assigning each step a level (1 + the max level of its
-        resolved dependencies, 0 if it has none) while walking the already
+    def _level_map(
+        self, ordered: list[PlanStep]
+    ) -> tuple[dict[str, int], dict[str, list[str]]]:
+        """Assign each step a level (1 + the max level of its resolved
+        dependencies, 0 if it has none) while walking the already
         topologically-sorted `ordered_steps()` — a dependency is therefore
         always leveled before its dependent, except for a cycle member,
         which falls back to level 0 exactly when `ordered_steps()` falls back
         to declaration order for it. That is the same "don't crash, make
         best-effort progress" contract `ordered_steps()` already documents,
         not a new failure mode this method introduces.
+
+        Returns the level per step id alongside, per step id, exactly which
+        of its `depends_on` ids were actually counted toward that level (i.e.
+        excluding any id dropped by the cycle fallback above) — the
+        cycle-safe edge set `dependency_edges()` and `execution_waves()` both
+        build on.
+        """
+        level: dict[str, int] = {}
+        edges: dict[str, list[str]] = {}
+        for step in ordered:
+            dep_levels = [d for d in step.depends_on if d in level]
+            level[step.id] = (max(level[d] for d in dep_levels) + 1) if dep_levels else 0
+            edges[step.id] = dep_levels
+        return level, edges
+
+    def execution_waves(self) -> list[list[PlanStep]]:
+        """Group `ordered_steps()` into waves the executor can run
+        concurrently: every step in a wave has all its dependencies satisfied
+        by an earlier wave, so nothing in a wave depends on anything else in
+        it.
         """
         ordered = self.ordered_steps()
-        level: dict[str, int] = {}
-        for step in ordered:
-            dep_levels = [level[d] for d in step.depends_on if d in level]
-            level[step.id] = (max(dep_levels) + 1) if dep_levels else 0
+        level, _ = self._level_map(ordered)
         wave_count = max(level.values(), default=-1) + 1
         waves: list[list[PlanStep]] = [[] for _ in range(wave_count)]
         for step in ordered:
             waves[level[step.id]].append(step)
         return waves
+
+    def dependency_edges(self) -> dict[str, list[str]]:
+        """Cycle-safe `depends_on` ids per step id.
+
+        Same leveling `execution_waves()` uses to bucket steps into
+        concurrency-safe batches, exposed per-step instead of per-wave so a
+        scheduler can start a step the instant its own dependencies finish
+        rather than waiting for every other member of its wave to drain too
+        (a wave's slowest step otherwise stalls its faster, unrelated
+        successors). A `depends_on` id that would form a cycle is dropped
+        here exactly where `execution_waves()` would put that step at level 0
+        instead of raising.
+        """
+        ordered = self.ordered_steps()
+        _, edges = self._level_map(ordered)
+        return edges
+
+    def transitive_dependencies(self) -> dict[str, set[str]]:
+        """All ancestor ids (direct and indirect) per step id, from the same
+        cycle-safe edges as `dependency_edges()`.
+
+        This is the "what should this step be allowed to see" set: exactly
+        its own dependency closure, never a step that merely happens to sit
+        at an earlier dependency depth without being depended on. A live,
+        scheduling-order-dependent snapshot ("whatever finished so far") is
+        not an option once steps start as soon as *their own* deps clear
+        instead of in lock-step batches — two independent steps could race,
+        and which one "finished first" would then leak into the other's
+        prompt nondeterministically. This is computed once, up front, so the
+        answer never depends on runtime timing.
+        """
+        edges = self.dependency_edges()
+        memo: dict[str, set[str]] = {}
+
+        def resolve(step_id: str) -> set[str]:
+            if step_id not in memo:
+                acc: set[str] = set()
+                for dep in edges.get(step_id, []):
+                    acc.add(dep)
+                    acc |= resolve(dep)
+                memo[step_id] = acc
+            return memo[step_id]
+
+        return {step_id: resolve(step_id) for step_id in edges}
 
 
 class StepResult(BaseModel):

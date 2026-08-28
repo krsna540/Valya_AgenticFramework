@@ -3,12 +3,15 @@
 Two distinct phases inside one node, and keeping them distinct is what makes
 the critic's job possible:
 
-  1. **Step execution.** `PlanStep`s run in dependency waves
-     (`Plan.execution_waves`): each wave's steps run concurrently, bounded by
-     `config.max_step_concurrency`, and a wave only starts once every step it
-     depends on has produced a result. Within a step: optionally invoke its
-     tool, optionally load its skill's SKILL.md, then ask the model to
-     perform that step. Each produces a `StepResult`.
+  1. **Step execution.** `PlanStep`s run as a true dependency DAG rather than
+     lock-step waves: each step starts the instant its own `depends_on`
+     (`Plan.dependency_edges`) are satisfied, bounded overall by
+     `config.max_step_concurrency`. A slow step therefore only blocks its
+     actual dependents, not every unrelated step that happened to land at the
+     same dependency depth — the latency win a wave barrier leaves on the
+     table. Within a step: optionally invoke its tool, optionally load its
+     skill's SKILL.md, then ask the model to perform that step. Each produces
+     a `StepResult`.
   2. **Synthesis.** Fold the step results into one answer addressed to the
      user. Streamed token-by-token when enabled, because this is the only
      part the user actually reads.
@@ -100,45 +103,61 @@ class ExecutorAgent(BaseAgent):
         carried_ids = {r.step_id for r in carried}
 
         tokens = {"input": 0, "output": 0, "calls": 0}
-        results: list[StepResult] = list(carried)
+        completed: dict[str, StepResult] = {r.step_id: r for r in carried}
         semaphore = asyncio.Semaphore(max(1, self.config.max_step_concurrency))
+        dependency_edges = plan.dependency_edges()
+        ancestor_ids = plan.transitive_dependencies()
+        events: dict[str, asyncio.Event] = {step.id: asyncio.Event() for step in steps}
+        for step_id in carried_ids:
+            events[step_id].set()
 
-        # Run in dependency waves rather than one step at a time: everything
-        # in a wave has already had its dependencies satisfied by an earlier
-        # wave (Plan.execution_waves), so nothing in it can legitimately need
-        # another wave member's output. `snapshot` is taken once per wave,
-        # before any of its steps start, so two independent steps run
-        # concurrently never see each other's result mid-flight — each sees
-        # exactly what a fully sequential run would have shown it at that
-        # point, no more.
-        for wave in plan.execution_waves():
-            runnable = [s for s in wave if targeted is None or s.id in targeted]
-            if not runnable:
-                continue  # every member already carried forward above
-            snapshot = list(results)
+        runnable_ids = {s.id for s in steps if targeted is None or s.id in targeted}
+        for step in steps:
+            if step.id not in runnable_ids and step.id not in carried_ids:
+                # Dropped by a targeted revision — neither run this pass nor
+                # carried forward. Release its event anyway so any dependent
+                # doesn't wait forever for a result that will never arrive.
+                events[step.id].set()
 
-            async def _run_bounded(step: PlanStep, prior: list[StepResult] = snapshot) -> StepResult:
-                async with semaphore:
-                    return await self._run_step(
-                        state=state,
-                        step=step,
-                        index=index_by_id[step.id],
-                        total=len(steps),
-                        prior_results=prior,
-                        tools=tools,
-                        skills=skills,
-                        revision=revision,
-                        tokens=tokens,
-                    )
+        async def _run_when_ready(step: PlanStep) -> StepResult:
+            deps = [events[d] for d in dependency_edges[step.id]]
+            if deps:
+                await asyncio.gather(*(e.wait() for e in deps))
+            # Visible context = this step's own dependency closure plus
+            # whatever was carried forward from an earlier revision — both
+            # fixed before any task starts, so the answer never depends on
+            # which of two unrelated, concurrently-started steps happened to
+            # finish first (see Plan.transitive_dependencies).
+            visible_ids = ancestor_ids[step.id] | carried_ids
+            prior = sorted(
+                (r for sid, r in completed.items() if sid in visible_ids),
+                key=lambda r: index_by_id.get(r.step_id, len(index_by_id) + 1),
+            )
+            async with semaphore:
+                result = await self._run_step(
+                    state=state,
+                    step=step,
+                    index=index_by_id[step.id],
+                    total=len(steps),
+                    prior_results=prior,
+                    tools=tools,
+                    skills=skills,
+                    revision=revision,
+                    tokens=tokens,
+                )
+            completed[step.id] = result
+            events[step.id].set()
+            return result
 
-            wave_results = await asyncio.gather(*(_run_bounded(s) for s in runnable))
-            results.extend(wave_results)
+        runnable_steps = [s for s in steps if s.id in runnable_ids]
+        if runnable_steps:
+            await asyncio.gather(*(_run_when_ready(s) for s in runnable_steps))
 
-        # Order the current pass's results back into plan order — carried-
-        # forward steps were prepended and waves may finish out of step
-        # order, so without this the synthesis prompt reads them scrambled.
-        order = {s.id: i for i, s in enumerate(steps)}
-        results.sort(key=lambda r: order.get(r.step_id, len(order)))
+        # Plan order for the synthesis prompt — completion order follows
+        # dependency-readiness, not plan order.
+        results = sorted(
+            completed.values(), key=lambda r: index_by_id.get(r.step_id, len(index_by_id) + 1)
+        )
 
         draft, synthesis_tokens = await self._synthesise(state, results)
         for key in ("input", "output", "calls"):

@@ -285,3 +285,127 @@ async def test_run_metadata_is_published_for_the_stop_stage_and_the_observatory(
     # chat.py's Stop stage reads duration_ms off the hook context.
     assert context.metadata["duration_ms"] >= 0
     assert context.metadata["agent_run_id"] == end["run_id"]
+
+
+# --- routing onto Temporal ---------------------------------------------------
+
+
+class _FakeTemporalRunner:
+    """Stands in for `TemporalRunner`: `name == "temporal"`, no `.runtime`
+    attribute (the real adapter has none either — that absence is what tells
+    `stream_agent_response` the terminal row was already written by the
+    workflow's own `persist_run_finish` activity, not by this module)."""
+
+    name = "temporal"
+
+    def __init__(self, end_data: dict, *, revision: int = 2) -> None:
+        self._end_data = end_data
+        self._revision = revision
+
+    async def stream(self, request, *, extra_sink=None):
+        from app.agents.lifecycle import EventType, LifecycleEvent
+
+        yield LifecycleEvent(
+            type=EventType.RUN_END,
+            run_id=request.run_id,
+            agent_id=request.agent_id,
+            agent_name=request.agent_name,
+            trace_id=request.trace_id,
+            phase="done",
+            revision=self._revision,
+            data=self._end_data,
+        )
+
+
+async def _empty_relay(run_id):
+    return
+    yield  # pragma: no cover — makes this an async generator with no items
+
+
+@pytest.mark.asyncio
+async def test_a_temporal_routed_run_does_not_pre_create_the_run_row(monkeypatch):
+    """Pre-creating the AgentRun row from here would race the workflow's own
+    `persist_run_start` activity and, because `create_run` has no
+    update-on-conflict path, permanently strand the row's `workflow_id` at
+    None — breaking human-in-the-loop signaling for every Temporal-routed
+    chat run (see api/routes/runs.py::decide_run). This is a regression
+    guard for that bug."""
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        agent_runner.agent_run_store, "create_run", lambda **kw: calls.append(kw) or None
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "get_runner",
+        lambda: _FakeTemporalRunner({"status": "succeeded", "final_answer": "ok", "final": True}),
+    )
+    monkeypatch.setattr(agent_runner, "subscribe_run_events", _empty_relay)
+
+    await collect(make_agent(), HookManager(), make_context())
+
+    assert calls == [], "create_run must not be called directly for a Temporal-routed run"
+
+
+@pytest.mark.asyncio
+async def test_a_temporal_routed_run_reports_the_authoritative_final_fields(monkeypatch):
+    """With no `.runtime.last_result` to read (TemporalRunner has none), the
+    wire's revisions/critic_verdict/needs_human_review must come from the
+    authoritative final RUN_END event instead of silently defaulting."""
+    monkeypatch.setattr(agent_runner.agent_run_store, "create_run", lambda **kw: None)
+    monkeypatch.setattr(
+        agent_runner,
+        "get_runner",
+        lambda: _FakeTemporalRunner(
+            {
+                "status": "succeeded",
+                "final_answer": "done via temporal",
+                "critic_verdict": "accept",
+                "needs_human_review": False,
+                "final": True,
+            },
+            revision=3,
+        ),
+    )
+    monkeypatch.setattr(agent_runner, "subscribe_run_events", _empty_relay)
+
+    events = await collect(make_agent(), HookManager(), make_context())
+    end = events[-1]
+
+    assert end["content"] == "done via temporal"
+    assert end["status"] == "succeeded"
+    assert end["critic_verdict"] == "accept"
+    assert end["revisions"] == 3
+    assert end["needs_human_review"] is False
+
+
+# --- _to_wire_event -----------------------------------------------------
+
+
+def test_to_wire_event_maps_type_and_data_pairs_directly():
+    """Signature takes (event_type, data, agent_id, phase=, revision=)
+    instead of a LifecycleEvent, so the same mapping works for both a live
+    in-process event and one decoded off the Redis relay. This pins the
+    mapping itself, independent of which source produced the pair."""
+    from app.agents.lifecycle import EventType
+
+    assert agent_runner._to_wire_event(
+        EventType.TOKEN, {"text": "hi"}, "agent-1"
+    ) == {"type": "token", "agent_id": "agent-1", "text": "hi"}
+
+    assert agent_runner._to_wire_event(
+        EventType.TOOL_CALL, {"tool_name": "sql_query", "step_id": "s1"}, "agent-1"
+    ) == {"type": "tool_call", "agent_id": "agent-1", "tool_name": "sql_query", "step_id": "s1"}
+
+    status = agent_runner._to_wire_event(
+        EventType.PLAN_READY, {"step_count": 3}, "agent-1", phase="planning", revision=1
+    )
+    assert status == {
+        "type": "agent_status",
+        "agent_id": "agent-1",
+        "stage": "plan_ready",
+        "phase": "planning",
+        "revision": 1,
+        "step_count": 3,
+    }
+
+    assert agent_runner._to_wire_event(EventType.NODE_START, {}, "agent-1") is None

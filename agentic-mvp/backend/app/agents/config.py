@@ -80,8 +80,9 @@ class AgentRuntimeConfig(BaseModel):
     execute_tools: bool = False
     #: Emit token-level SSE while the executor drafts. Off = one block per node.
     stream_tokens: bool = True
-    #: Ceiling on how many plan steps the executor runs concurrently within
-    #: one dependency "wave" (see Plan.execution_waves). 1 recovers the old
+    #: Ceiling on how many plan steps the executor runs concurrently overall
+    #: (see Plan.dependency_edges — steps start as soon as their own
+    #: dependencies finish, not in lock-step batches). 1 recovers the old
     #: fully-sequential behaviour; the default lets an independent-steps plan
     #: finish in roughly one step's latency instead of N, while still
     #: bounding fan-out against a model gateway's own rate limits.
